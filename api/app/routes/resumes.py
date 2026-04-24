@@ -30,6 +30,7 @@ from app.services.parser_jakes import parse_jakes
 from app.services.protected_terms import resolve_protected_terms
 from app.services.renderer_jakes import render_jakes
 from app.services.tailor import tailor_resume, TailorResult
+from app.services.versioning import snapshot_resume_version
 from app.templates import get_template
 from app.templates.jakes_schema import get_section_schema
 
@@ -108,6 +109,14 @@ async def onboard_tex(
         content_json=result.content_json,
     )
     db.add(resume)
+    await db.flush()
+    await snapshot_resume_version(
+        db=db,
+        resume=resume,
+        page_count=result.page_count,
+        edit_source="onboard",
+        edit_prompt=None,
+    )
     await db.commit()
     await db.refresh(resume)
     response.headers["X-Page-Count"] = str(result.page_count)
@@ -140,6 +149,14 @@ async def onboard_pdf(
         content_json=result.content_json,
     )
     db.add(resume)
+    await db.flush()
+    await snapshot_resume_version(
+        db=db,
+        resume=resume,
+        page_count=result.page_count,
+        edit_source="onboard",
+        edit_prompt=None,
+    )
     await db.commit()
     await db.refresh(resume)
     response.headers["X-Page-Count"] = str(result.page_count)
@@ -165,8 +182,17 @@ async def update_resume(resume_id: int, body: ResumeUpdate, user_id: int = Depen
         raise HTTPException(404)
     if body.name is not None:
         r.name = body.name
-    if body.latex_source is not None:
+    latex_changed = body.latex_source is not None
+    if latex_changed:
         r.latex_source = body.latex_source
+    if latex_changed:
+        await snapshot_resume_version(
+            db=db,
+            resume=r,
+            page_count=0,
+            edit_source="manual",
+            edit_prompt=None,
+        )
     await db.commit()
     await db.refresh(r)
     return r
@@ -272,6 +298,13 @@ async def accept_edit(
             detail={"error": "not_one_page", "page_count": compiled.page_count},
         )
     resume.latex_source = body.proposed_latex
+    await snapshot_resume_version(
+        db=db,
+        resume=resume,
+        page_count=compiled.page_count,
+        edit_source="ai_chat",
+        edit_prompt=None,
+    )
     await db.commit()
     await db.refresh(resume)
     payload = ResumeOut.model_validate(resume, from_attributes=True).model_dump(mode="json")
@@ -334,6 +367,13 @@ async def put_sections(
         )
     r.latex_source = rendered
     r.content_json = body.content_json
+    await snapshot_resume_version(
+        db=db,
+        resume=r,
+        page_count=compiled.page_count,
+        edit_source="section_form",
+        edit_prompt=None,
+    )
     await db.commit()
     await db.refresh(r)
     return r
@@ -391,6 +431,14 @@ async def tailor_endpoint(
         protected_terms=master.protected_terms or [],
     )
     db.add(variant)
+    await db.flush()
+    await snapshot_resume_version(
+        db=db,
+        resume=variant,
+        page_count=result.page_count,
+        edit_source="ai_tailor",
+        edit_prompt=f"{body.title} @ {body.company}",
+    )
     await db.commit()
     await db.refresh(variant)
 
