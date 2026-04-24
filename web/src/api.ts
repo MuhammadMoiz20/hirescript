@@ -135,6 +135,32 @@ export async function tailorToJd(masterId: number, body: TailorRequest): Promise
   return res.json();
 }
 
+export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
+
+export async function onboardTex(name: string, latex_source: string): Promise<OnboardedResume> {
+  const res = await fetch(`${BASE}/resumes/onboard/tex`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, latex_source }),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function onboardPdf(name: string, file: File): Promise<OnboardedResume> {
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("file", file);
+  const res = await fetch(`${BASE}/resumes/onboard/pdf`, {
+    method: "POST",
+    credentials: "include",
+    body: fd,
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
 export async function listGroupedResumes(): Promise<ResumeGroup[]> {
   const res = await fetch(`${BASE}/resumes/grouped`, { credentials: "include" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -178,4 +204,6 @@ export const api = {
   listGroupedResumes,
   getSections,
   putSections,
+  onboardTex,
+  onboardPdf,
 };
