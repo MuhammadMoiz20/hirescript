@@ -9,12 +9,13 @@
 **Tech Stack:** React 18 + Vite + TypeScript, CodeMirror 6, pdfjs-dist, FastAPI, SQLAlchemy 2.x + Alembic, Pydantic v2, asyncpg, Postgres 16, Tectonic (latest), Docker Compose, pytest, Vitest, Playwright.
 
 **Follow-up plans (not in this document):**
-1. `claude-agent-sdk` integration + chat sidebar + diff UI
-2. "Tailor to JD" preset + `job_descriptions` table + variants
+1. `claude-agent-sdk` integration + chat sidebar + diff UI + **one-page overflow-repair loop** (`OnePageEnforcer` service, protected-terms list, iterative re-prompt on `page_count != 1`). See design doc "The One-Page Constraint" section — this is where the constraint is enforced end-to-end.
+2. "Tailor to JD" preset + `job_descriptions` table + variants (JD-derived protected terms feed into the enforcer).
 3. Section form editor + LaTeX ↔ JSON parser per template
 4. PDF onboarding (Marker + template mapping)
-5. Version history + rollback
+5. Version history + rollback (store `page_count` on each version)
 6. MinIO + VPS deployment with Caddy
+7. Manual-edit page-overflow banner + one-click "Ask Claude to tighten"
 
 ---
 
@@ -436,14 +437,19 @@ git commit -m "feat(api): register Jake's Resume template"
 
 ## Task 5: Tectonic compile service
 
+The compile service is where the one-page constraint enters the stack. Page count is a first-class return value from day one so later AI plans (overflow-repair loop) can depend on it without refactoring.
+
 **Files:**
 - Create: `api/app/services/compile.py`
 - Create: `api/tests/test_compile.py`
+- Modify: `api/pyproject.toml` (add `pypdf`)
 
-**Step 1: Write the failing test**
+**Step 1: Add `pypdf==5.*` to `pyproject.toml` dependencies.**
+
+**Step 2: Write the failing test**
 
 ```python
-from app.services.compile import compile_latex, CompileError
+from app.services.compile import compile_latex, CompileError, CompileResult
 
 MINIMAL_DOC = r"""
 \documentclass{article}
@@ -452,9 +458,21 @@ Hello HireScript.
 \end{document}
 """
 
-def test_compile_returns_pdf_bytes():
-    pdf = compile_latex(MINIMAL_DOC)
-    assert pdf[:4] == b"%PDF"
+def test_compile_returns_pdf_bytes_and_page_count():
+    result = compile_latex(MINIMAL_DOC)
+    assert isinstance(result, CompileResult)
+    assert result.pdf[:4] == b"%PDF"
+    assert result.page_count == 1
+
+def test_compile_detects_multi_page():
+    doc = r"""
+    \documentclass{article}
+    \begin{document}
+    """ + ("Filler paragraph. " * 2000) + r"""
+    \end{document}
+    """
+    result = compile_latex(doc)
+    assert result.page_count >= 2
 
 def test_compile_raises_on_invalid_latex():
     import pytest
@@ -462,19 +480,27 @@ def test_compile_raises_on_invalid_latex():
         compile_latex(r"\documentclass{article}\begin{document}\unknowncmd\end{document}")
 ```
 
-**Step 2: Write `api/app/services/compile.py`**
+**Step 3: Write `api/app/services/compile.py`**
 
 ```python
+import io
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from pypdf import PdfReader
 
 class CompileError(RuntimeError):
     def __init__(self, stderr: str):
         super().__init__(stderr)
         self.stderr = stderr
 
-def compile_latex(source: str, timeout: int = 30) -> bytes:
+@dataclass(frozen=True)
+class CompileResult:
+    pdf: bytes
+    page_count: int
+
+def compile_latex(source: str, timeout: int = 30) -> CompileResult:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         tex_file = tmp_path / "doc.tex"
@@ -488,8 +514,12 @@ def compile_latex(source: str, timeout: int = 30) -> bytes:
         pdf_path = tmp_path / "doc.pdf"
         if not pdf_path.exists():
             raise CompileError("PDF not produced")
-        return pdf_path.read_bytes()
+        pdf_bytes = pdf_path.read_bytes()
+        page_count = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+        return CompileResult(pdf=pdf_bytes, page_count=page_count)
 ```
+
+Note: at this walking-skeleton stage we *report* page count but do not yet enforce `page_count == 1` — enforcement belongs to the AI-edit plan where the overflow-repair loop lives. Manual-edit flows will gain a UI warning in a later task. See the design doc's "One-Page Constraint" section.
 
 **Step 3: Run the test**
 
@@ -831,10 +861,14 @@ async def compile_resume(resume_id: int, user_id: int = Depends(require_user), d
     if r is None or r.user_id != user_id:
         raise HTTPException(404)
     try:
-        pdf = compile_latex(r.latex_source)
+        result = compile_latex(r.latex_source)
     except CompileError as e:
         raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
-    return Response(content=pdf, media_type="application/pdf")
+    return Response(
+        content=result.pdf,
+        media_type="application/pdf",
+        headers={"X-Page-Count": str(result.page_count)},
+    )
 ```
 
 **Step 3: Run the test**
