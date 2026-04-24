@@ -391,7 +391,7 @@ def test_get_template_returns_latex_skeleton():
 
 **Step 2: Save Jake's Resume template**
 
-Download `jakes_skeleton.tex` from `https://github.com/jakegut/resume` (MIT licensed) and commit it verbatim at `api/app/templates/jakes_skeleton.tex`. Strip any personal content so it's a placeholder skeleton with Lorem-ipsum-style entries.
+The template file `api/app/templates/jakes_skeleton.tex` is pre-seeded in the repo with the user's master resume (Muhammad Moiz). It uses Jake's Resume LaTeX structure (`\resumeSubheading`, `\resumeItemListStart`, etc.) with concrete content already filled in. Do not overwrite it or strip content — use it as-is.
 
 **Step 3: Write `api/app/templates/jakes.py`**
 
