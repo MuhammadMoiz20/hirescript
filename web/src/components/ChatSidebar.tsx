@@ -119,6 +119,7 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
           disabled={streaming}
           rows={3}
           placeholder="Describe the edit..."
+          aria-label="Chat instruction"
           style={{ width: "100%", resize: "vertical" }}
         />
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
