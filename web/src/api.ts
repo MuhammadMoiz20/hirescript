@@ -97,6 +97,50 @@ export async function acceptEdit(id: number, proposed_latex: string): Promise<Re
   return res.json();
 }
 
+export type Variant = ResumeOut & {
+  parent_id: number;
+  job_description_id: number | null;
+  jd_title: string | null;
+  jd_company: string | null;
+};
+
+export type ResumeGroup = { master: ResumeOut; variants: Variant[] };
+
+export type TailorRequest = {
+  title: string;
+  company: string;
+  url?: string;
+  jd_text: string;
+  deep_tailor?: boolean;
+};
+
+export type TailorResponse = {
+  variant: ResumeOut;
+  jd_id: number;
+  page_count: number;
+  iterations: number;
+  enforced: boolean;
+  tier_history: string[];
+  keywords_used: string[];
+};
+
+export async function tailorToJd(masterId: number, body: TailorRequest): Promise<TailorResponse> {
+  const res = await fetch(`${BASE}/resumes/${masterId}/tailor`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function listGroupedResumes(): Promise<ResumeGroup[]> {
+  const res = await fetch(`${BASE}/resumes/grouped`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
@@ -107,4 +151,6 @@ export const api = {
   compileResume: (id: number) => fetch(`${BASE}/resumes/${id}/compile`, { method: "POST", credentials: "include" }).then(r => r.ok ? r.blob() : r.json().then(j => Promise.reject(j))),
   streamEdit,
   acceptEdit,
+  tailorToJd,
+  listGroupedResumes,
 };
