@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && mv tectonic /usr/local/bin/ \
  && apt-get remove -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
+# Node + Claude CLI for claude-agent-sdk
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @anthropic-ai/claude-code \
+ && apt-get remove -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e ".[dev]"

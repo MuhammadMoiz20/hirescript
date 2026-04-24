@@ -21,6 +21,7 @@ services:
     volumes:
       - ./api:/app
       - pdfs:/app/compiled_pdfs
+      - ${HOME}/.claude:/root/.claude
     depends_on:
       db:
         condition: service_healthy
