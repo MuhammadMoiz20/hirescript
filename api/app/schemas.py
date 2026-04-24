@@ -72,6 +72,21 @@ class OnboardedResumeOut(ResumeOut):
     page_count: int
 
 
+class VersionSummary(BaseModel):
+    id: int
+    edit_source: str
+    edit_prompt: str | None
+    page_count: int
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class VersionDetail(VersionSummary):
+    resume_id: int
+    latex_source: str
+    content_json: dict
+
+
 class TailorResponse(BaseModel):
     variant: ResumeOut
     jd_id: int
