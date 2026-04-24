@@ -1,0 +1,35 @@
+from datetime import datetime
+from sqlalchemy import JSON, String, Text, ForeignKey, DateTime, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resumes: Mapped[list["Resume"]] = relationship(back_populates="user")
+
+
+class Resume(Base):
+    __tablename__ = "resumes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("resumes.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16))  # master | variant
+    name: Mapped[str] = mapped_column(String(200))
+    template_id: Mapped[str] = mapped_column(String(64))
+    latex_source: Mapped[str] = mapped_column(Text)
+    content_json: Mapped[dict | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    user: Mapped[User] = relationship(back_populates="resumes")
