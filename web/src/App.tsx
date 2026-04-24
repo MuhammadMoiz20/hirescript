@@ -1,16 +1,8 @@
 import { useEffect, useState } from "react";
 import Login from "./routes/Login";
 import ResumeList from "./routes/ResumeList";
+import Editor from "./routes/Editor";
 import { api } from "./api";
-
-function Editor({ id, onBack }: { id: number; onBack: () => void }) {
-  return (
-    <div>
-      <button onClick={onBack}>Back</button>
-      <p>Editor {id}</p>
-    </div>
-  );
-}
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);

@@ -6,5 +6,5 @@ export default defineConfig({
   server: {
     proxy: { "/api": { target: "http://api:8000", rewrite: p => p.replace(/^\/api/, "") } },
   },
-  test: { environment: "jsdom", globals: true, setupFiles: ["./src/test-setup.ts"] },
+  test: { environment: "jsdom", globals: true, setupFiles: ["./src/test-setup.ts"], exclude: ["node_modules", "e2e"] },
 });
