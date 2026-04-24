@@ -141,6 +141,29 @@ export async function listGroupedResumes(): Promise<ResumeGroup[]> {
   return res.json();
 }
 
+export type SectionsPayload = {
+  template_id: string;
+  schema: any;
+  content_json: any;
+};
+
+export async function getSections(id: number): Promise<SectionsPayload> {
+  const res = await fetch(`${BASE}/resumes/${id}/sections`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function putSections(id: number, content_json: any): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/sections`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content_json }),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
@@ -153,4 +176,6 @@ export const api = {
   acceptEdit,
   tailorToJd,
   listGroupedResumes,
+  getSections,
+  putSections,
 };
