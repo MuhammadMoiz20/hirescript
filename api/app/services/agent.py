@@ -94,6 +94,39 @@ def _extract_text(msg: object) -> str:
     return "".join(parts)
 
 
+async def query_json(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    tier: ModelTier,
+) -> dict:
+    """Run a non-streaming query and parse a strict JSON envelope.
+
+    Tolerates ```json fenced blocks. Raises ``AgentError`` on empty output or
+    invalid JSON.
+    """
+    options = ClaudeAgentOptions(
+        model=MODELS[tier],
+        system_prompt=system_prompt,
+    )
+    collected: list[str] = []
+    async for msg in query(prompt=user_prompt, options=options):
+        text = _extract_text(msg)
+        if text:
+            collected.append(text)
+    raw = "".join(collected).strip()
+    if not raw:
+        raise AgentError("Model returned no text for query_json")
+    if raw.startswith("```"):
+        raw = "\n".join(
+            line for line in raw.splitlines() if not line.startswith("```")
+        ).strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AgentError(f"invalid JSON: {exc}; got {raw[:200]}") from exc
+
+
 async def edit_resume(
     *,
     current_latex: str,
