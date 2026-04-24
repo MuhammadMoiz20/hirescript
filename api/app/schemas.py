@@ -21,6 +21,18 @@ class ResumeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class VariantOut(ResumeOut):
+    parent_id: int
+    job_description_id: int | None = None
+    jd_title: str | None = None
+    jd_company: str | None = None
+
+
+class ResumeGroup(BaseModel):
+    master: ResumeOut
+    variants: list[VariantOut]
+
+
 class EditRequest(BaseModel):
     instruction: str
     tier: Literal["haiku", "sonnet", "opus"] = "haiku"

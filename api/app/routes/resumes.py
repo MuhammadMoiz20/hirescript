@@ -11,6 +11,8 @@ from app.schemas import (
     ResumeCreate,
     ResumeUpdate,
     ResumeOut,
+    ResumeGroup,
+    VariantOut,
     EditRequest,
     EditAcceptRequest,
     TailorRequest,
@@ -41,6 +43,45 @@ async def create_resume(body: ResumeCreate, user_id: int = Depends(require_user)
 async def list_resumes(user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):
     rows = await db.execute(select(Resume).where(Resume.user_id == user_id).order_by(Resume.updated_at.desc()))
     return rows.scalars().all()
+
+@router.get("/grouped", response_model=list[ResumeGroup])
+async def list_grouped(user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):
+    masters = (await db.execute(
+        select(Resume).where(Resume.user_id == user_id, Resume.kind == "master")
+        .order_by(Resume.updated_at.desc())
+    )).scalars().all()
+    if not masters:
+        return []
+
+    master_ids = [m.id for m in masters]
+    variants = (await db.execute(
+        select(Resume).where(Resume.user_id == user_id, Resume.kind == "variant",
+                             Resume.parent_id.in_(master_ids))
+        .order_by(Resume.updated_at.desc())
+    )).scalars().all()
+
+    jd_ids = [v.job_description_id for v in variants if v.job_description_id is not None]
+    jd_map: dict[int, JobDescription] = {}
+    if jd_ids:
+        jds = (await db.execute(
+            select(JobDescription).where(JobDescription.id.in_(jd_ids))
+        )).scalars().all()
+        jd_map = {j.id: j for j in jds}
+
+    groups: list[ResumeGroup] = []
+    for m in masters:
+        ms_variants = [v for v in variants if v.parent_id == m.id]
+        out_variants = []
+        for v in ms_variants:
+            jd = jd_map.get(v.job_description_id) if v.job_description_id else None
+            data = {
+                **{k: getattr(v, k) for k in ("id","name","template_id","kind","latex_source","updated_at","parent_id","job_description_id")},
+                "jd_title": jd.title if jd else None,
+                "jd_company": jd.company if jd else None,
+            }
+            out_variants.append(VariantOut.model_validate(data))
+        groups.append(ResumeGroup(master=ResumeOut.model_validate(m), variants=out_variants))
+    return groups
 
 @router.get("/{resume_id}", response_model=ResumeOut)
 async def get_resume(resume_id: int, user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):
