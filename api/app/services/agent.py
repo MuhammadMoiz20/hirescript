@@ -74,11 +74,12 @@ def _build_system_prompt(
         "\nThe resume currently overflows one page. Produce ONE repair "
         "iteration. Respond with ONLY a single JSON object and nothing else "
         "(no markdown fences, no commentary), matching this schema exactly:\n"
-        '{"diff": "<unified diff string>", '
+        '{"diff": "<full revised LaTeX document>", '
         '"removed_terms": ["..."], '
         '"rationale": "<short explanation>"}\n'
-        "`removed_terms` must list any terms you dropped; it MUST NOT contain "
-        "any protected term."
+        "The `diff` field MUST contain the COMPLETE revised LaTeX document "
+        "(not a unified-diff hunk). `removed_terms` must list any terms you "
+        "dropped; it MUST NOT contain any protected term."
     )
 
 
