@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
 from app.models import Resume
 from app.schemas import ResumeCreate, ResumeUpdate, ResumeOut
+from app.services.compile import compile_latex, CompileError
 from app.templates import get_template
 
 router = APIRouter(prefix="/resumes")
@@ -45,3 +47,18 @@ async def update_resume(resume_id: int, body: ResumeUpdate, user_id: int = Depen
     await db.commit()
     await db.refresh(r)
     return r
+
+@router.post("/{resume_id}/compile")
+async def compile_resume(resume_id: int, user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+    try:
+        result = compile_latex(r.latex_source)
+    except CompileError as e:
+        raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
+    return Response(
+        content=result.pdf,
+        media_type="application/pdf",
+        headers={"X-Page-Count": str(result.page_count)},
+    )
