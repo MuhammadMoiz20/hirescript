@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # Tectonic — single binary
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates \
+    libgraphite2-3 libfontconfig1 libfreetype6 libharfbuzz0b libssl3 \
  && curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net \
     | sh \
  && mv tectonic /usr/local/bin/ \
