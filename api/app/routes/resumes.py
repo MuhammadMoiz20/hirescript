@@ -6,12 +6,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
-from app.models import Resume
-from app.schemas import ResumeCreate, ResumeUpdate, ResumeOut, EditRequest, EditAcceptRequest
+from app.models import Resume, JobDescription
+from app.schemas import (
+    ResumeCreate,
+    ResumeUpdate,
+    ResumeOut,
+    EditRequest,
+    EditAcceptRequest,
+    TailorRequest,
+    TailorResponse,
+)
 from app.services.agent import edit_resume, AgentError
 from app.services.compile import compile_latex, CompileError
 from app.services.enforcer import enforce_one_page
 from app.services.protected_terms import resolve_protected_terms
+from app.services.tailor import tailor_resume, TailorResult
 from app.templates import get_template
 
 router = APIRouter(prefix="/resumes")
@@ -161,4 +170,70 @@ async def accept_edit(
         content=json.dumps(payload),
         media_type="application/json",
         headers={"X-Page-Count": "1"},
+    )
+
+
+@router.post("/{master_id}/tailor", response_model=TailorResponse)
+async def tailor_endpoint(
+    master_id: int,
+    body: TailorRequest,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    master = await db.get(Resume, master_id)
+    if master is None or master.user_id != user_id:
+        raise HTTPException(404)
+    if master.kind != "master":
+        raise HTTPException(400, detail={"error": "not_a_master_resume"})
+
+    result: TailorResult = await tailor_resume(
+        master_latex=master.latex_source,
+        jd_text=body.jd_text,
+        user_pinned=master.protected_terms or [],
+        deep_tailor=body.deep_tailor,
+    )
+
+    if not result.enforced:
+        raise HTTPException(
+            422,
+            detail={
+                "error": "not_one_page",
+                "page_count": result.page_count,
+                "iterations": result.iterations,
+            },
+        )
+
+    jd = JobDescription(
+        user_id=user_id,
+        title=body.title,
+        company=body.company,
+        url=body.url,
+        raw_text=body.jd_text,
+        parsed_json={"keywords": result.keywords_used},
+    )
+    db.add(jd)
+    await db.flush()
+
+    variant = Resume(
+        user_id=user_id,
+        parent_id=master.id,
+        kind="variant",
+        name=f"{master.name} \u2014 {body.company}",
+        template_id=master.template_id,
+        latex_source=result.variant_latex,
+        job_description_id=jd.id,
+        protected_terms=master.protected_terms or [],
+    )
+    db.add(variant)
+    await db.commit()
+    await db.refresh(variant)
+
+    return TailorResponse(
+        variant=ResumeOut.model_validate(variant),
+        jd_id=jd.id,
+        page_count=result.page_count,
+        iterations=result.iterations,
+        enforced=result.enforced,
+        tier_history=result.tier_history,
+        keywords_used=result.keywords_used,
     )

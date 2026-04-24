@@ -28,3 +28,21 @@ class EditRequest(BaseModel):
 
 class EditAcceptRequest(BaseModel):
     proposed_latex: str
+
+
+class TailorRequest(BaseModel):
+    title: str
+    company: str
+    url: str | None = None
+    jd_text: str
+    deep_tailor: bool = False
+
+
+class TailorResponse(BaseModel):
+    variant: ResumeOut
+    jd_id: int
+    page_count: int
+    iterations: int
+    enforced: bool
+    tier_history: list[str]
+    keywords_used: list[str]
