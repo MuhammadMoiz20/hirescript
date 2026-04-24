@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Literal
 
 class ResumeCreate(BaseModel):
     name: str
@@ -18,3 +19,12 @@ class ResumeOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class EditRequest(BaseModel):
+    instruction: str
+    tier: Literal["haiku", "sonnet", "opus"] = "haiku"
+
+
+class EditAcceptRequest(BaseModel):
+    proposed_latex: str

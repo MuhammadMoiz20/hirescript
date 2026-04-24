@@ -60,3 +60,8 @@ def _clear_testclient_cookies():
         compile_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_resume_edits import client as edits_client
+        edits_client.cookies.clear()
+    except Exception:
+        pass
