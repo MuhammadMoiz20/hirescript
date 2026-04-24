@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,13 @@ from app.schemas import (
     SectionsPutRequest,
     TailorRequest,
     TailorResponse,
+    OnboardTexRequest,
+    OnboardedResumeOut,
 )
 from app.services.agent import edit_resume, AgentError
 from app.services.compile import compile_latex, CompileError
 from app.services.enforcer import enforce_one_page
+from app.services.onboard import onboard_from_pdf, onboard_from_latex
 from app.services.parser_jakes import parse_jakes
 from app.services.protected_terms import resolve_protected_terms
 from app.services.renderer_jakes import render_jakes
@@ -87,6 +90,66 @@ async def list_grouped(user_id: int = Depends(require_user), db: AsyncSession = 
             out_variants.append(VariantOut.model_validate(data))
         groups.append(ResumeGroup(master=ResumeOut.model_validate(m), variants=out_variants))
     return groups
+
+@router.post("/onboard/tex", response_model=OnboardedResumeOut)
+async def onboard_tex(
+    body: OnboardTexRequest,
+    response: Response,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await onboard_from_latex(latex=body.latex_source)
+    resume = Resume(
+        user_id=user_id,
+        kind="master",
+        template_id="jakes",
+        name=body.name,
+        latex_source=result.latex_source,
+        content_json=result.content_json,
+    )
+    db.add(resume)
+    await db.commit()
+    await db.refresh(resume)
+    response.headers["X-Page-Count"] = str(result.page_count)
+    return OnboardedResumeOut(
+        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at")},
+        enforced=result.enforced,
+        iterations=result.iterations,
+        page_count=result.page_count,
+    )
+
+
+@router.post("/onboard/pdf", response_model=OnboardedResumeOut)
+async def onboard_pdf(
+    response: Response,
+    name: str = Form(...),
+    file: UploadFile = File(...),
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    pdf_bytes = await file.read()
+    if not pdf_bytes or pdf_bytes[:4] != b"%PDF":
+        raise HTTPException(400, detail={"error": "not_a_pdf"})
+    result = await onboard_from_pdf(pdf_bytes=pdf_bytes)
+    resume = Resume(
+        user_id=user_id,
+        kind="master",
+        template_id="jakes",
+        name=name,
+        latex_source=result.latex_source,
+        content_json=result.content_json,
+    )
+    db.add(resume)
+    await db.commit()
+    await db.refresh(resume)
+    response.headers["X-Page-Count"] = str(result.page_count)
+    return OnboardedResumeOut(
+        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at")},
+        enforced=result.enforced,
+        iterations=result.iterations,
+        page_count=result.page_count,
+    )
+
 
 @router.get("/{resume_id}", response_model=ResumeOut)
 async def get_resume(resume_id: int, user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):

@@ -61,6 +61,17 @@ class SectionsPutRequest(BaseModel):
     content_json: dict
 
 
+class OnboardTexRequest(BaseModel):
+    name: str
+    latex_source: str
+
+
+class OnboardedResumeOut(ResumeOut):
+    enforced: bool
+    iterations: int
+    page_count: int
+
+
 class TailorResponse(BaseModel):
     variant: ResumeOut
     jd_id: int
