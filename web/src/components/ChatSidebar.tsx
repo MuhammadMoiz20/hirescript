@@ -12,6 +12,25 @@ type AssistantMessage = {
   result?: EditResult;
 };
 
+/**
+ * Strip the JSON envelope (and anything after a leading fence opener) from
+ * the assistant's streamed text so the user only sees prose, never the
+ * `latex` payload Claude emits at the end of edit replies.
+ */
+function visiblePart(text: string): string {
+  // Hide everything from a ```json fence onward.
+  const fenceIdx = text.indexOf("```json");
+  if (fenceIdx !== -1) return text.slice(0, fenceIdx).trimEnd();
+  // Hide a trailing bare JSON object that contains "latex":
+  const m = text.match(/^([\s\S]*?)\{[^{}]*"latex"\s*:[\s\S]*$/);
+  if (m) return m[1].trimEnd();
+  // Hide a leading ``` fence opener mid-stream while the model is still
+  // forming the envelope.
+  const tickIdx = text.indexOf("```");
+  if (tickIdx !== -1) return text.slice(0, tickIdx).trimEnd();
+  return text;
+}
+
 type UserMessage = { role: "user"; text: string };
 
 type Message = UserMessage | AssistantMessage;
@@ -197,6 +216,8 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
           }
           // assistant
           const showCaret = isLast && streaming && m.status === "streaming";
+          const visible = visiblePart(m.text);
+          const isEdit = m.status === "done" && m.result?.proposed_latex;
           return (
             <div
               key={i}
@@ -209,9 +230,34 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
                 color: m.status === "error" ? "var(--err)" : "var(--ink)",
               }}
             >
-              <div className={showCaret ? "caret" : ""} style={{ whiteSpace: "pre-wrap" }}>
-                {m.text || (showCaret ? "" : m.status === "error" ? "Error" : "")}
-              </div>
+              {visible && (
+                <div className={showCaret ? "caret" : ""} style={{ whiteSpace: "pre-wrap" }}>
+                  {visible}
+                </div>
+              )}
+              {!visible && showCaret && <div className="caret" />}
+              {!visible && m.status === "error" && (
+                <div style={{ color: "var(--err)" }}>Error</div>
+              )}
+              {isEdit && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 8px",
+                    border: "1px solid var(--rule)",
+                    borderRadius: 3,
+                    background: "var(--paper-2)",
+                    fontSize: 12,
+                  }}
+                >
+                  <Glyph name="check" size={12} />
+                  <span style={{ color: "var(--ink-2)" }}>
+                    Edit drafted — review the diff in the preview pane.
+                  </span>
+                </div>
+              )}
               {m.status === "done" && m.result && (
                 <CompileChip
                   iterations={m.result.iterations}
