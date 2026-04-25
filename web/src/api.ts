@@ -14,12 +14,15 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 export type Tier = "haiku" | "sonnet" | "opus";
 
 export type EditResult = {
-  proposed_latex: string;
+  /** Null when the agent's reply was conversational and not an actual edit. */
+  proposed_latex: string | null;
   page_count: number;
   enforced: boolean;
   iterations: number;
   tier_history: string[];
   removed_terms: string[];
+  /** "chat" if no edit was proposed, "edit" if a proposal is attached. */
+  kind?: "chat" | "edit";
 };
 
 export type EditCallbacks = {

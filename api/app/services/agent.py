@@ -65,9 +65,20 @@ def _build_system_prompt(
     )
     if mode == "edit":
         return base + (
-            "\nRespond with a unified diff that applies the requested edit to "
-            "the LaTeX source. Use standard `---`/`+++` file headers and `@@` "
-            "hunks. Do not include prose outside the diff."
+            "\nIf the user's message is a greeting, a question, or otherwise "
+            "does NOT request a concrete edit to the resume, reply briefly in "
+            "plain prose. DO NOT include any JSON, code fence, or LaTeX in "
+            "that case.\n\n"
+            "If the user requests an edit, respond with EXACTLY ONE fenced "
+            "JSON code block at the end of your reply (no other JSON, no "
+            "prose after it):\n"
+            "```json\n"
+            '{\"latex\": \"<the FULL revised LaTeX document, '
+            "\\\\documentclass through \\\\end{document}, with the requested "
+            'edit applied>\", \"rationale\": \"<one-sentence summary>\"}\n'
+            "```\n"
+            "The `latex` value MUST contain the COMPLETE document — never a "
+            "diff hunk, never a partial snippet. Preserve all protected terms."
         )
     # repair
     return base + (

@@ -126,7 +126,10 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         "Tighten this resume so it fits on exactly one page. Do not drop protected terms.",
         "haiku",
         {
-          onResult: (result) => setProposed(result),
+          onResult: (result) => {
+            if (result.proposed_latex) setProposed(result);
+            else setError("Claude didn't propose an edit. Try a more specific instruction.");
+          },
           onError: (msg) => setError(msg),
         },
       );
@@ -243,7 +246,12 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
 
         {/* Chat rail */}
         <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          <ChatSidebar resumeId={id} onProposed={setProposed} />
+          <ChatSidebar
+            resumeId={id}
+            onProposed={(result) => {
+              if (result.proposed_latex) setProposed(result);
+            }}
+          />
         </div>
       </div>
     </div>
