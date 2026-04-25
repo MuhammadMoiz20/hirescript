@@ -80,3 +80,13 @@ def _clear_testclient_cookies():
         onboard_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_version_snapshots import client as version_snapshots_client
+        version_snapshots_client.cookies.clear()
+    except Exception:
+        pass
+    try:
+        from tests.test_versions_endpoints import client as versions_endpoints_client
+        versions_endpoints_client.cookies.clear()
+    except Exception:
+        pass

@@ -61,3 +61,22 @@ class JobDescription(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ResumeVersion(Base):
+    __tablename__ = "resume_versions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resume_id: Mapped[int] = mapped_column(ForeignKey("resumes.id"), index=True)
+    latex_source: Mapped[str] = mapped_column(Text)
+    content_json: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    page_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    edit_source: Mapped[str] = mapped_column(String(32))
+    edit_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import User
-from app.routes import auth, resumes
+from app.routes import auth, resumes, versions
 
 @asynccontextmanager
 async def lifespan(app):
@@ -17,6 +17,7 @@ async def lifespan(app):
 app = FastAPI(title="HireScript API", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(resumes.router)
+app.include_router(versions.router)
 
 @app.get("/health")
 def health():

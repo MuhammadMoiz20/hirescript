@@ -7,6 +7,7 @@ import PdfPreview from "../components/PdfPreview";
 import ChatSidebar from "../components/ChatSidebar";
 import DiffView from "../components/DiffView";
 import SectionFormEditor from "../components/SectionFormEditor";
+import VersionHistory from "../components/VersionHistory";
 
 export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [latex, setLatex] = useState("");
@@ -15,7 +16,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [saving, setSaving] = useState(false);
   const [proposed, setProposed] = useState<EditResult | null>(null);
   const [accepting, setAccepting] = useState(false);
-  const [view, setView] = useState<"form" | "latex">("form");
+  const [view, setView] = useState<"form" | "latex" | "history">("form");
   const [sectionsPayload, setSectionsPayload] = useState<SectionsPayload | null>(null);
   const [sectionsLoading, setSectionsLoading] = useState(false);
 
@@ -49,7 +50,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     }
   }
 
-  async function switchTo(mode: "form" | "latex") {
+  async function switchTo(mode: "form" | "latex" | "history") {
     if (mode === view) return;
     if (mode === "form") {
       setSectionsLoading(true);
@@ -101,8 +102,19 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           <button onClick={compile}>Compile</button>
           <button onClick={() => switchTo("form")} disabled={view === "form" || sectionsLoading}>Form</button>
           <button onClick={() => switchTo("latex")} disabled={view === "latex"}>LaTeX</button>
+          <button onClick={() => switchTo("history")} disabled={view === "history"}>History</button>
         </div>
-        {view === "latex" ? (
+        {view === "history" ? (
+          <VersionHistory
+            resumeId={id}
+            onRolledBack={(updated) => {
+              setLatex(updated.latex_source);
+              setPdf(null);
+              compile();
+              api.getSections(id).then(setSectionsPayload).catch(() => {});
+            }}
+          />
+        ) : view === "latex" ? (
           <CodeMirror
             value={latex}
             extensions={[StreamLanguage.define(stex)]}

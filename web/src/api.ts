@@ -190,6 +190,29 @@ export async function putSections(id: number, content_json: any): Promise<Resume
   return res.json();
 }
 
+export type VersionSummary = {
+  id: number;
+  edit_source: string;
+  edit_prompt: string | null;
+  page_count: number;
+  created_at: string;
+};
+
+export async function listVersions(id: number): Promise<VersionSummary[]> {
+  const res = await fetch(`${BASE}/resumes/${id}/versions`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function rollback(id: number, versionId: number): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/versions/${versionId}/rollback`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
@@ -206,4 +229,6 @@ export const api = {
   putSections,
   onboardTex,
   onboardPdf,
+  listVersions,
+  rollback,
 };
