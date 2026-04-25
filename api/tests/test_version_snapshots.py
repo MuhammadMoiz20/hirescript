@@ -129,6 +129,24 @@ async def test_tailor_creates_version_for_variant():
     )
 
 
+async def test_accept_edit_persists_pdf_key():
+    from app.services.storage import ensure_bucket
+    ensure_bucket()
+    cookies = _login()
+    rid = client.post("/resumes", json={"name":"PDF","template_id":"jakes"}, cookies=cookies).json()["id"]
+    with patch("app.routes.resumes.compile_latex", return_value=_ok_compile(page_count=1)):
+        r = client.post(f"/resumes/{rid}/edits/accept", cookies=cookies, json={
+            "proposed_latex": "\\documentclass{article}\\begin{document}p\\end{document}",
+        })
+        assert r.status_code == 200
+    versions = await _versions_for(rid)
+    chat_versions = [v for v in versions if v.edit_source == "ai_chat"]
+    assert chat_versions
+    # The PDF key should follow the convention versions/<id>.pdf
+    v = chat_versions[-1]
+    assert v.compiled_pdf_key == f"versions/{v.id}.pdf"
+
+
 async def test_onboard_tex_creates_version():
     cookies = _login()
     fake = OnboardResult(
