@@ -148,6 +148,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           flex: 1,
           display: "grid",
           gridTemplateColumns: "48px 1fr 1fr 360px",
+          gridTemplateRows: "1fr",
           minHeight: 0,
         }}
       >
@@ -241,7 +242,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         </div>
 
         {/* Chat rail */}
-        <div style={{ minWidth: 0, overflow: "hidden" }}>
+        <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <ChatSidebar resumeId={id} onProposed={setProposed} />
         </div>
       </div>

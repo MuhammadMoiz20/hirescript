@@ -101,7 +101,8 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100%",
+        flex: 1,
+        minHeight: 0,
         background: "var(--paper)",
       }}
     >
