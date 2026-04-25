@@ -19,6 +19,9 @@ class Resume(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("resumes.id"), nullable=True)
+    job_description_id: Mapped[int | None] = mapped_column(
+        ForeignKey("job_descriptions.id"), nullable=True
+    )
     kind: Mapped[str] = mapped_column(String(16))  # master | variant
     name: Mapped[str] = mapped_column(String(200))
     template_id: Mapped[str] = mapped_column(String(64))
@@ -39,3 +42,22 @@ class Resume(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     user: Mapped[User] = relationship(back_populates="resumes")
+
+
+class JobDescription(Base):
+    __tablename__ = "job_descriptions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    company: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    raw_text: Mapped[str] = mapped_column(Text)
+    parsed_json: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

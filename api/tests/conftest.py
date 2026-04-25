@@ -65,3 +65,8 @@ def _clear_testclient_cookies():
         edits_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_tailor_endpoint import client as tailor_client
+        tailor_client.cookies.clear()
+    except Exception:
+        pass
