@@ -1,8 +1,16 @@
 from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
+
 from app.services.agent import query_json, AgentError, ModelTier
 from app.services.jd_parser import extract_keywords
 from app.services.enforcer import enforce_one_page
 from app.services.protected_terms import resolve_protected_terms
+
+ProgressFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _noop(event: str, data: dict[str, Any]) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -36,8 +44,12 @@ async def tailor_resume(
     jd_text: str,
     user_pinned: list[str] | None = None,
     deep_tailor: bool = False,
+    on_progress: ProgressFn | None = None,
 ) -> TailorResult:
+    progress = on_progress or _noop
+    await progress("keywords_start", {})
     keywords = await extract_keywords(raw_text=jd_text)
+    await progress("keywords_done", {"count": len(keywords)})
     protected = resolve_protected_terms(user_pinned=user_pinned or [], jd_terms=keywords)
     tier: ModelTier = "opus" if deep_tailor else "sonnet"
     system = _SYSTEM_TEMPLATE.format(protected_terms_csv=", ".join(protected))
@@ -45,12 +57,16 @@ async def tailor_resume(
         "SOURCE_RESUME_LATEX:\n```latex\n" + master_latex + "\n```\n\n"
         "JOB_DESCRIPTION:\n```\n" + jd_text + "\n```"
     )
+    await progress("draft_start", {"tier": tier})
     data = await query_json(system_prompt=system, user_prompt=user, tier=tier)
     candidate = data.get("latex")
     if not isinstance(candidate, str) or "\\documentclass" not in candidate:
         raise AgentError(f"unexpected tailor JSON: {data!r}")
+    await progress("draft_done", {"chars": len(candidate)})
     enforced = await enforce_one_page(
-        candidate_latex=candidate, protected_terms=protected
+        candidate_latex=candidate,
+        protected_terms=protected,
+        on_progress=progress,
     )
     return TailorResult(
         variant_latex=enforced.latex,

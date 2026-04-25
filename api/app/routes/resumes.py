@@ -410,7 +410,7 @@ async def put_sections(
     return r
 
 
-@router.post("/{master_id}/tailor", response_model=TailorResponse)
+@router.post("/{master_id}/tailor")
 async def tailor_endpoint(
     master_id: int,
     body: TailorRequest,
@@ -423,63 +423,105 @@ async def tailor_endpoint(
     if master.kind != "master":
         raise HTTPException(400, detail={"error": "not_a_master_resume"})
 
-    result: TailorResult = await tailor_resume(
-        master_latex=master.latex_source,
-        jd_text=body.jd_text,
-        user_pinned=master.protected_terms or [],
-        deep_tailor=body.deep_tailor,
-    )
+    master_latex = master.latex_source
+    master_id_local = master.id
+    master_name = master.name
+    master_template_id = master.template_id
+    master_protected = list(master.protected_terms or [])
 
-    if not result.enforced:
-        raise HTTPException(
-            422,
-            detail={
-                "error": "not_one_page",
-                "page_count": result.page_count,
-                "iterations": result.iterations,
-            },
-        )
+    import asyncio as _asyncio
 
-    jd = JobDescription(
-        user_id=user_id,
-        title=body.title,
-        company=body.company,
-        url=body.url,
-        raw_text=body.jd_text,
-        parsed_json={"keywords": result.keywords_used},
-    )
-    db.add(jd)
-    await db.flush()
+    queue: _asyncio.Queue = _asyncio.Queue()
 
-    variant = Resume(
-        user_id=user_id,
-        parent_id=master.id,
-        kind="variant",
-        name=f"{master.name} \u2014 {body.company}",
-        template_id=master.template_id,
-        latex_source=result.variant_latex,
-        job_description_id=jd.id,
-        protected_terms=master.protected_terms or [],
-    )
-    db.add(variant)
-    await db.flush()
-    await snapshot_resume_version(
-        db=db,
-        resume=variant,
-        page_count=result.page_count,
-        edit_source="ai_tailor",
-        edit_prompt=f"{body.title} @ {body.company}",
-        pdf_bytes=result.pdf,
-    )
-    await db.commit()
-    await db.refresh(variant)
+    async def on_progress(name: str, data: dict) -> None:
+        await queue.put(("phase", {"name": name, **data}))
 
-    return TailorResponse(
-        variant=ResumeOut.model_validate(variant),
-        jd_id=jd.id,
-        page_count=result.page_count,
-        iterations=result.iterations,
-        enforced=result.enforced,
-        tier_history=result.tier_history,
-        keywords_used=result.keywords_used,
-    )
+    async def runner():
+        try:
+            result: TailorResult = await tailor_resume(
+                master_latex=master_latex,
+                jd_text=body.jd_text,
+                user_pinned=master_protected,
+                deep_tailor=body.deep_tailor,
+                on_progress=on_progress,
+            )
+            if not result.enforced:
+                await queue.put((
+                    "error",
+                    {
+                        "error": "not_one_page",
+                        "page_count": result.page_count,
+                        "iterations": result.iterations,
+                        "message": (
+                            f"Tailored resume came out at {result.page_count} pages "
+                            f"after {result.iterations} repair attempts."
+                        ),
+                    },
+                ))
+                return
+
+            jd = JobDescription(
+                user_id=user_id,
+                title=body.title,
+                company=body.company,
+                url=body.url,
+                raw_text=body.jd_text,
+                parsed_json={"keywords": result.keywords_used},
+            )
+            db.add(jd)
+            await db.flush()
+
+            variant = Resume(
+                user_id=user_id,
+                parent_id=master_id_local,
+                kind="variant",
+                name=f"{master_name} \u2014 {body.company}",
+                template_id=master_template_id,
+                latex_source=result.variant_latex,
+                job_description_id=jd.id,
+                protected_terms=master_protected,
+            )
+            db.add(variant)
+            await db.flush()
+            await snapshot_resume_version(
+                db=db,
+                resume=variant,
+                page_count=result.page_count,
+                edit_source="ai_tailor",
+                edit_prompt=f"{body.title} @ {body.company}",
+                pdf_bytes=result.pdf,
+            )
+            await db.commit()
+            await db.refresh(variant)
+
+            payload = TailorResponse(
+                variant=ResumeOut.model_validate(variant),
+                jd_id=jd.id,
+                page_count=result.page_count,
+                iterations=result.iterations,
+                enforced=result.enforced,
+                tier_history=result.tier_history,
+                keywords_used=result.keywords_used,
+            ).model_dump(mode="json")
+            await queue.put(("result", payload))
+        except AgentError as exc:
+            await queue.put(("error", {"message": str(exc)[:500]}))
+        except Exception as exc:  # pragma: no cover - defensive
+            await queue.put(("error", {"message": str(exc)[:500]}))
+        finally:
+            await queue.put(None)
+
+    async def event_stream():
+        task = _asyncio.create_task(runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event_name, data = item
+                yield f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

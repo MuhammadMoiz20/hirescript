@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch, AsyncMock
 
 from fastapi.testclient import TestClient
@@ -11,6 +12,23 @@ client = TestClient(app)
 
 def _login():
     return client.post("/auth/login", json={"password": "changeme"}).cookies
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    for raw in text.split("\n\n"):
+        if not raw.strip():
+            continue
+        name = "message"
+        data_lines: list[str] = []
+        for line in raw.split("\n"):
+            if line.startswith("event:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].strip())
+        if data_lines:
+            events.append((name, json.loads("\n".join(data_lines))))
+    return events
 
 
 def _ok_result(
@@ -51,7 +69,10 @@ def test_tailor_creates_variant_when_enforced():
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
         )
     assert r.status_code == 200
-    body = r.json()
+    events = _parse_sse(r.text)
+    result_events = [d for n, d in events if n == "result"]
+    assert len(result_events) == 1
+    body = result_events[0]
     assert body["variant"]["kind"] == "variant"
     assert "Acme" in body["variant"]["name"]
     assert body["enforced"] is True
@@ -70,8 +91,12 @@ def test_tailor_rejects_when_not_enforced():
             cookies=cookies,
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
         )
-    assert r.status_code == 422
-    assert r.json()["detail"]["error"] == "not_one_page"
+    assert r.status_code == 200
+    events = _parse_sse(r.text)
+    error_events = [d for n, d in events if n == "error"]
+    assert len(error_events) == 1
+    assert error_events[0]["error"] == "not_one_page"
+    assert error_events[0]["page_count"] == 2
 
 
 def test_tailor_404_on_missing_master():
@@ -94,12 +119,14 @@ def test_tailor_400_when_target_is_variant():
         "app.routes.resumes.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
-        first = client.post(
+        first_resp = client.post(
             f"/resumes/{mid}/tailor",
             cookies=cookies,
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
-        ).json()
-    variant_id = first["variant"]["id"]
+        )
+    first_events = _parse_sse(first_resp.text)
+    first_result = next(d for n, d in first_events if n == "result")
+    variant_id = first_result["variant"]["id"]
     with patch(
         "app.routes.resumes.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
@@ -110,6 +137,7 @@ def test_tailor_400_when_target_is_variant():
             json={"title": "x", "company": "y", "jd_text": "JD"},
         )
     assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "not_a_master_resume"
 
 
 def test_tailor_requires_auth():

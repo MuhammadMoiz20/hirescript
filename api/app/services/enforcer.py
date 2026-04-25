@@ -14,9 +14,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
 
 from app.services.agent import AgentError, ModelTier, repair_overflow
 from app.services.compile import compile_latex
+
+ProgressFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _noop(event: str, data: dict[str, Any]) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -40,19 +47,29 @@ async def enforce_one_page(
     candidate_latex: str,
     protected_terms: list[str],
     max_iterations: int = 4,
+    on_progress: ProgressFn | None = None,
 ) -> EnforceResult:
     """Compile ``candidate_latex`` and, if it is multi-page, repair-loop.
 
     Returns the best attempt. ``enforced=True`` iff the final compile was
     exactly one page.
+
+    ``on_progress`` is called at each phase boundary with one of:
+      ("compile_start",   {})
+      ("compile_done",    {"page_count": int})
+      ("repair_start",    {"iteration": int, "tier": str, "page_count": int})
+      ("repair_compile_done", {"iteration": int, "page_count": int})
     """
+    progress = on_progress or _noop
     log: list[str] = []
     tier_history: list[str] = []
 
     current_latex = candidate_latex
+    await progress("compile_start", {})
     compile_result = await asyncio.to_thread(compile_latex, current_latex)
     current_pdf = compile_result.pdf
     current_page_count = compile_result.page_count
+    await progress("compile_done", {"page_count": current_page_count})
 
     if current_page_count == 1:
         return EnforceResult(
@@ -75,6 +92,10 @@ async def enforce_one_page(
         log.append(
             f"iteration {iter_index}: page_count={current_page_count}, "
             f"calling repair_overflow tier={tier}"
+        )
+        await progress(
+            "repair_start",
+            {"iteration": iter_index, "tier": tier, "page_count": current_page_count},
         )
 
         try:
@@ -99,6 +120,10 @@ async def enforce_one_page(
 
         log.append(
             f"iteration {iter_index}: post-repair page_count={current_page_count}"
+        )
+        await progress(
+            "repair_compile_done",
+            {"iteration": iter_index, "page_count": current_page_count},
         )
 
         if current_page_count == 1:

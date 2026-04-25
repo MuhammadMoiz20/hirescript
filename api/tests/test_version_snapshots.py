@@ -121,7 +121,15 @@ async def test_tailor_creates_version_for_variant():
             },
         )
         assert r.status_code == 200
-    variant_id = r.json()["variant"]["id"]
+    import json as _json
+    result_event = next(
+        _json.loads(line.split(":", 1)[1].strip())
+        for raw in r.text.split("\n\n")
+        if "event: result" in raw
+        for line in raw.split("\n")
+        if line.startswith("data:")
+    )
+    variant_id = result_event["variant"]["id"]
     versions = await _versions_for(variant_id)
     assert any(
         v.edit_source == "ai_tailor" and "Acme" in (v.edit_prompt or "")
