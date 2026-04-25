@@ -15,15 +15,20 @@ from app.schemas import (
     VariantOut,
     EditRequest,
     EditAcceptRequest,
+    SectionsResponse,
+    SectionsPutRequest,
     TailorRequest,
     TailorResponse,
 )
 from app.services.agent import edit_resume, AgentError
 from app.services.compile import compile_latex, CompileError
 from app.services.enforcer import enforce_one_page
+from app.services.parser_jakes import parse_jakes
 from app.services.protected_terms import resolve_protected_terms
+from app.services.renderer_jakes import render_jakes
 from app.services.tailor import tailor_resume, TailorResult
 from app.templates import get_template
+from app.templates.jakes_schema import get_section_schema
 
 router = APIRouter(prefix="/resumes")
 
@@ -212,6 +217,63 @@ async def accept_edit(
         media_type="application/json",
         headers={"X-Page-Count": "1"},
     )
+
+
+@router.get("/{resume_id}/sections", response_model=SectionsResponse)
+async def get_sections(
+    resume_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+    if r.template_id != "jakes":
+        raise HTTPException(
+            400,
+            detail={"error": "unsupported_template", "template_id": r.template_id},
+        )
+    if not r.content_json:
+        parsed = parse_jakes(r.latex_source)
+        r.content_json = parsed
+        await db.commit()
+        await db.refresh(r)
+    return SectionsResponse(
+        template_id=r.template_id,
+        schema=get_section_schema(r.template_id),
+        content_json=r.content_json,
+    )
+
+
+@router.put("/{resume_id}/sections", response_model=ResumeOut)
+async def put_sections(
+    resume_id: int,
+    body: SectionsPutRequest,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+    if r.template_id != "jakes":
+        raise HTTPException(400, detail={"error": "unsupported_template"})
+    rendered = render_jakes(body.content_json)
+    try:
+        compiled = compile_latex(rendered)
+    except CompileError as e:
+        raise HTTPException(
+            422, detail={"error": "compile_failed", "log": str(e)[:4000]}
+        )
+    if compiled.page_count != 1:
+        raise HTTPException(
+            422,
+            detail={"error": "not_one_page", "page_count": compiled.page_count},
+        )
+    r.latex_source = rendered
+    r.content_json = body.content_json
+    await db.commit()
+    await db.refresh(r)
+    return r
 
 
 @router.post("/{master_id}/tailor", response_model=TailorResponse)

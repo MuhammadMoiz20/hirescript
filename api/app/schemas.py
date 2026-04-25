@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Literal
 
@@ -48,6 +48,17 @@ class TailorRequest(BaseModel):
     url: str | None = None
     jd_text: str
     deep_tailor: bool = False
+
+
+class SectionsResponse(BaseModel):
+    template_id: str
+    schema_: dict = Field(alias="schema")
+    content_json: dict
+    model_config = {"populate_by_name": True}
+
+
+class SectionsPutRequest(BaseModel):
+    content_json: dict
 
 
 class TailorResponse(BaseModel):
