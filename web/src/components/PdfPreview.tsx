@@ -23,5 +23,5 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
     return () => { cancelled = true; };
   }, [pdfBlob]);
   if (!pdfBlob) return <p>Compile to see preview</p>;
-  return <canvas ref={canvasRef} style={{ maxWidth: "100%", border: "1px solid #ccc" }} />;
+  return <canvas ref={canvasRef} style={{ maxWidth: "100%", border: "1px solid var(--rule)" }} />;
 }
