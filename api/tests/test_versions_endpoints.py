@@ -100,3 +100,37 @@ def test_versions_require_auth():
     client.cookies.clear()
     r = client.get("/resumes/1/versions")
     assert r.status_code == 401
+
+
+def test_pdf_endpoint_404_when_no_pdf():
+    cookies = _login()
+    rid = client.post("/resumes", json={"name":"NP","template_id":"jakes"}, cookies=cookies).json()["id"]
+    # Manual PUT creates a version with no compiled_pdf_key
+    client.put(f"/resumes/{rid}", cookies=cookies, json={"latex_source": "\\documentclass{article}\\begin{document}m\\end{document}"})
+    versions = client.get(f"/resumes/{rid}/versions", cookies=cookies).json()
+    vid = versions[0]["id"]
+    r = client.get(f"/resumes/{rid}/versions/{vid}/pdf", cookies=cookies, follow_redirects=False)
+    assert r.status_code == 404
+
+
+def test_pdf_endpoint_redirects_when_present():
+    from unittest.mock import patch
+    from app.services.compile import CompileResult
+    cookies = _login()
+    rid = client.post("/resumes", json={"name":"WP","template_id":"jakes"}, cookies=cookies).json()["id"]
+    # ai_chat path snapshots with pdf_bytes — bucket must exist
+    from app.services.storage import ensure_bucket
+    ensure_bucket()
+    with patch("app.routes.resumes.compile_latex", return_value=CompileResult(pdf=b"%PDF...123", page_count=1)):
+        r1 = client.post(f"/resumes/{rid}/edits/accept", cookies=cookies, json={
+            "proposed_latex": "\\documentclass{article}\\begin{document}x\\end{document}",
+        })
+        assert r1.status_code == 200
+    versions = client.get(f"/resumes/{rid}/versions", cookies=cookies).json()
+    chat = next(v for v in versions if v["edit_source"] == "ai_chat")
+    r = client.get(f"/resumes/{rid}/versions/{chat['id']}/pdf", cookies=cookies, follow_redirects=False)
+    assert r.status_code == 302
+    assert "Location" in {k.title(): v for k, v in r.headers.items()} or "location" in r.headers
+    loc = r.headers.get("location", "")
+    assert "minio" in loc or "9000" in loc
+    assert f"versions/{chat['id']}.pdf" in loc

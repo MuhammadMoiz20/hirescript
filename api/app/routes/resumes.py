@@ -116,6 +116,7 @@ async def onboard_tex(
         page_count=result.page_count,
         edit_source="onboard",
         edit_prompt=None,
+        pdf_bytes=result.pdf,
     )
     await db.commit()
     await db.refresh(resume)
@@ -156,6 +157,7 @@ async def onboard_pdf(
         page_count=result.page_count,
         edit_source="onboard",
         edit_prompt=None,
+        pdf_bytes=result.pdf,
     )
     await db.commit()
     await db.refresh(resume)
@@ -304,6 +306,7 @@ async def accept_edit(
         page_count=compiled.page_count,
         edit_source="ai_chat",
         edit_prompt=None,
+        pdf_bytes=compiled.pdf,
     )
     await db.commit()
     await db.refresh(resume)
@@ -373,6 +376,7 @@ async def put_sections(
         page_count=compiled.page_count,
         edit_source="section_form",
         edit_prompt=None,
+        pdf_bytes=compiled.pdf,
     )
     await db.commit()
     await db.refresh(r)
@@ -438,6 +442,7 @@ async def tailor_endpoint(
         page_count=result.page_count,
         edit_source="ai_tailor",
         edit_prompt=f"{body.title} @ {body.company}",
+        pdf_bytes=result.pdf,
     )
     await db.commit()
     await db.refresh(variant)

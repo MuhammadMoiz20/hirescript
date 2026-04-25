@@ -77,6 +77,7 @@ class ResumeVersion(Base):
     page_count: Mapped[int] = mapped_column(default=0, server_default="0")
     edit_source: Mapped[str] = mapped_column(String(32))
     edit_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    compiled_pdf_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +7,7 @@ from app.auth import require_user
 from app.db import get_db
 from app.models import Resume, ResumeVersion
 from app.schemas import ResumeOut, VersionDetail, VersionSummary
+from app.services.storage import presign_get
 from app.services.versioning import snapshot_resume_version
 
 router = APIRouter(prefix="/resumes")
@@ -49,6 +51,23 @@ async def get_version(
     if v is None or v.resume_id != resume_id:
         raise HTTPException(404)
     return v
+
+
+@router.get("/{resume_id}/versions/{version_id}/pdf")
+async def get_version_pdf(
+    resume_id: int,
+    version_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _ensure_owned(resume_id, user_id, db)
+    v = await db.get(ResumeVersion, version_id)
+    if v is None or v.resume_id != resume_id:
+        raise HTTPException(404)
+    if not v.compiled_pdf_key:
+        raise HTTPException(404, detail={"error": "no_pdf"})
+    url = presign_get(key=v.compiled_pdf_key)
+    return RedirectResponse(url=url, status_code=302)
 
 
 @router.post(
