@@ -1,12 +1,17 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
 from app.models import Resume
-from app.schemas import ResumeCreate, ResumeUpdate, ResumeOut
+from app.schemas import ResumeCreate, ResumeUpdate, ResumeOut, EditRequest, EditAcceptRequest
+from app.services.agent import edit_resume, AgentError
 from app.services.compile import compile_latex, CompileError
+from app.services.enforcer import enforce_one_page
+from app.services.protected_terms import resolve_protected_terms
 from app.templates import get_template
 
 router = APIRouter(prefix="/resumes")
@@ -61,4 +66,99 @@ async def compile_resume(resume_id: int, user_id: int = Depends(require_user), d
         content=result.pdf,
         media_type="application/pdf",
         headers={"X-Page-Count": str(result.page_count)},
+    )
+
+
+@router.post("/{resume_id}/edits")
+async def propose_edit(
+    resume_id: int,
+    body: EditRequest,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    resume = await db.get(Resume, resume_id)
+    if resume is None or resume.user_id != user_id:
+        raise HTTPException(404)
+
+    protected = resolve_protected_terms(user_pinned=resume.protected_terms or [])
+    latex_source = resume.latex_source
+
+    try:
+        current = compile_latex(latex_source)
+        page_hint = current.page_count
+    except CompileError:
+        page_hint = 0
+
+    instruction = body.instruction
+    tier = body.tier
+
+    async def event_stream():
+        collected: list[str] = []
+        try:
+            async for chunk in edit_resume(
+                current_latex=latex_source,
+                instruction=instruction,
+                protected_terms=protected,
+                page_count_hint=page_hint,
+                tier=tier,
+            ):
+                collected.append(chunk)
+                yield f"event: chunk\ndata: {json.dumps({'text': chunk})}\n\n"
+
+            proposed = "".join(collected).strip()
+            if proposed.startswith("```"):
+                proposed = "\n".join(
+                    line for line in proposed.splitlines() if not line.startswith("```")
+                )
+
+            result = await enforce_one_page(
+                candidate_latex=proposed,
+                protected_terms=protected,
+            )
+            payload = {
+                "proposed_latex": result.latex,
+                "page_count": result.page_count,
+                "enforced": result.enforced,
+                "iterations": result.iterations,
+                "tier_history": result.tier_history,
+                "removed_terms": [],
+            }
+            yield f"event: result\ndata: {json.dumps(payload)}\n\n"
+        except AgentError as exc:
+            yield f"event: error\ndata: {json.dumps({'message': str(exc)[:500]})}\n\n"
+        except Exception as exc:  # pragma: no cover - defensive
+            yield f"event: error\ndata: {json.dumps({'message': str(exc)[:500]})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/{resume_id}/edits/accept")
+async def accept_edit(
+    resume_id: int,
+    body: EditAcceptRequest,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    resume = await db.get(Resume, resume_id)
+    if resume is None or resume.user_id != user_id:
+        raise HTTPException(404)
+    try:
+        compiled = compile_latex(body.proposed_latex)
+    except CompileError as e:
+        raise HTTPException(
+            422, detail={"error": "compile_failed", "log": str(e)[:4000]}
+        )
+    if compiled.page_count != 1:
+        raise HTTPException(
+            422,
+            detail={"error": "not_one_page", "page_count": compiled.page_count},
+        )
+    resume.latex_source = body.proposed_latex
+    await db.commit()
+    await db.refresh(resume)
+    payload = ResumeOut.model_validate(resume, from_attributes=True).model_dump(mode="json")
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/json",
+        headers={"X-Page-Count": "1"},
     )
