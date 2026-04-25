@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { test, expect, vi, beforeEach } from "vitest";
 import { ThemeProvider, useTheme } from "./ThemeProvider";
 
 function mockOsTheme(dark: boolean) {
