@@ -57,7 +57,14 @@ def test_edit_endpoint_streams_chunks_then_result():
     cookies = _login()
     resume = _create_resume(cookies)
 
-    fake_edit = MagicMock(return_value=_async_gen(["abc", "def"]))
+    # Stream conversational tokens followed by the JSON envelope the route now expects.
+    fake_edit = MagicMock(
+        return_value=_async_gen([
+            "abc",
+            "def",
+            '\n```json\n{"latex": "REVISED-DOC", "rationale": "ok"}\n```',
+        ])
+    )
     fake_enforce = AsyncMock(
         return_value=EnforceResult(
             latex="final latex",

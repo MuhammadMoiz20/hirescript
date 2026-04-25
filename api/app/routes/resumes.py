@@ -239,6 +239,7 @@ async def propose_edit(
     tier = body.tier
 
     async def event_stream():
+        import re
         collected: list[str] = []
         try:
             async for chunk in edit_resume(
@@ -251,14 +252,39 @@ async def propose_edit(
                 collected.append(chunk)
                 yield f"event: chunk\ndata: {json.dumps({'text': chunk})}\n\n"
 
-            proposed = "".join(collected).strip()
-            if proposed.startswith("```"):
-                proposed = "\n".join(
-                    line for line in proposed.splitlines() if not line.startswith("```")
-                )
+            full = "".join(collected)
 
+            # Extract a fenced ```json {...} ``` envelope, if any.
+            envelope: dict | None = None
+            match = re.search(r"```json\s*(\{.*?\})\s*```", full, re.DOTALL)
+            if not match:
+                # Fall back to a trailing bare JSON object.
+                match = re.search(r"(\{[^{}]*\"latex\"\s*:.*\})\s*$", full, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group(1))
+                    if isinstance(parsed, dict) and isinstance(parsed.get("latex"), str):
+                        envelope = parsed
+                except json.JSONDecodeError:
+                    pass
+
+            if envelope is None:
+                # Conversational reply only — no edit to apply.
+                payload = {
+                    "proposed_latex": None,
+                    "page_count": page_hint,
+                    "enforced": True,
+                    "iterations": 0,
+                    "tier_history": [],
+                    "removed_terms": [],
+                    "kind": "chat",
+                }
+                yield f"event: result\ndata: {json.dumps(payload)}\n\n"
+                return
+
+            candidate = envelope["latex"]
             result = await enforce_one_page(
-                candidate_latex=proposed,
+                candidate_latex=candidate,
                 protected_terms=protected,
             )
             payload = {
@@ -268,6 +294,7 @@ async def propose_edit(
                 "iterations": result.iterations,
                 "tier_history": result.tier_history,
                 "removed_terms": [],
+                "kind": "edit",
             }
             yield f"event: result\ndata: {json.dumps(payload)}\n\n"
         except AgentError as exc:

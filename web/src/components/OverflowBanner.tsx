@@ -1,3 +1,5 @@
+import Button from "./ui/Button";
+
 interface Props {
   pageCount: number;
   onTighten: () => void;
@@ -8,22 +10,25 @@ export default function OverflowBanner({ pageCount, onTighten, busy = false }: P
   if (pageCount <= 1) return null;
   return (
     <div role="alert" style={{
-      background: "#fee", border: "1px solid #c00", color: "#900",
-      padding: "8px 12px", marginBottom: 8, borderRadius: 4,
-      display: "flex", alignItems: "center", gap: 12,
+      background: "var(--err-soft)",
+      border: "1px solid var(--err)",
+      color: "var(--ink)",
+      padding: "10px 14px",
+      borderRadius: 4,
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginBottom: 12,
     }}>
-      <span>
-        Resume is {pageCount} pages. Fix before saving as final, or ask Claude to
-        tighten without dropping protected terms.
+      <span className="mono" style={{ fontSize: 12, color: "var(--err)", fontWeight: 600 }}>
+        {pageCount} pages
       </span>
-      <button
-        type="button"
-        onClick={onTighten}
-        disabled={busy}
-        style={{ marginLeft: "auto" }}
-      >
+      <span style={{ flex: 1 }}>
+        Resume overflows. Fix it before saving as final, or have Claude tighten without dropping protected terms.
+      </span>
+      <Button onClick={onTighten} disabled={busy} variant="primary" size="sm">
         {busy ? "Tightening…" : "Ask Claude to tighten"}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -63,7 +63,7 @@ test("overflow banner triggers tighten flow", async ({ page }) => {
   await page.goto("http://localhost:5173");
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
-  await page.getByRole("button", { name: "OBig" }).click();
+  await page.getByRole("button", { name: /open editor/i }).first().click();
   // Force a compile so pageCount is known
   await page.getByRole("button", { name: /^compile$/i }).click();
   // Banner appears

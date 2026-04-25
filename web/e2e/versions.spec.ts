@@ -60,7 +60,7 @@ test("history view lists versions and rollback hits API", async ({ page }) => {
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
   // Click into the master
-  await page.getByRole("button", { name: "VHist" }).click();
+  await page.getByRole("button", { name: /open editor/i }).first().click();
   // Click "History" pill in Editor
   await page.getByRole("button", { name: /^history$/i }).click();
   // Versions list
