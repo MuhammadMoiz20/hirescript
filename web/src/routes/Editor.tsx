@@ -27,6 +27,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [sectionsLoading, setSectionsLoading] = useState(false);
   const [pageCount, setPageCount] = useState<number>(1);
   const [tightening, setTightening] = useState(false);
+  const [formContent, setFormContent] = useState<any>(null);
 
   useEffect(() => {
     (async () => {
@@ -52,8 +53,27 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
 
   async function save() {
     setSaving(true);
+    setError(null);
     try {
-      await api.updateResume(id, latex);
+      if (view === "form" && formContent) {
+        // Form view: render form → LaTeX → compile → persist via /sections.
+        const updated = await api.putSections(id, formContent);
+        setLatex(updated.latex_source);
+        // Refresh sections in case the renderer normalized something.
+        api.getSections(id).then(setSectionsPayload).catch(() => {});
+      } else {
+        await api.updateResume(id, latex);
+      }
+    } catch (e: any) {
+      const detail = e?.detail ?? e;
+      if (detail?.error === "not_one_page") {
+        setError(`Renders to ${detail.page_count} pages — tighten and try again.`);
+      } else if (detail?.error === "compile_failed") {
+        setError(detail.log || "Compile failed.");
+      } else {
+        setError(detail?.message || String(e));
+      }
+      throw e;
     } finally {
       setSaving(false);
     }
@@ -68,7 +88,8 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
       setPdf(blob);
       setPageCount(pc);
     } catch (e: any) {
-      setError(e?.detail?.log || String(e));
+      // save() already surfaced the error; only set if not already set.
+      if (!error) setError(e?.detail?.log || String(e));
       setPdf(null);
     } finally {
       setCompiling(false);
@@ -197,7 +218,12 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
                 style={{ height: "100%" }}
               />
             ) : sectionsPayload ? (
-              <SectionFormEditor resumeId={id} payload={sectionsPayload} onSaved={handleSaved} />
+              <SectionFormEditor
+                resumeId={id}
+                payload={sectionsPayload}
+                onSaved={handleSaved}
+                onContentChange={setFormContent}
+              />
             ) : (
               <p style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>Loading sections…</p>
             )}

@@ -30,16 +30,22 @@ const payload = {
   },
 };
 
+function headerNameInput() {
+  // Header is the first section; pick the first matching "Name" label.
+  const inputs = screen.getAllByLabelText(/^name$/i) as HTMLInputElement[];
+  return inputs[0];
+}
+
 test("renders header fields", () => {
   render(<SectionFormEditor resumeId={1} payload={payload} onSaved={() => {}} />);
-  expect((screen.getByLabelText(/name/i) as HTMLInputElement).value).toBe("Foo");
+  expect(headerNameInput().value).toBe("Foo");
 });
 
 test("editing a field updates state, save calls putSections", async () => {
   const onSaved = vi.fn();
   render(<SectionFormEditor resumeId={1} payload={payload} onSaved={onSaved} />);
-  fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "Bar" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  fireEvent.change(headerNameInput(), { target: { value: "Bar" } });
+  fireEvent.click(screen.getByRole("button", { name: /save & compile/i }));
   const { api } = await import("../api");
   await waitFor(() => expect(api.putSections).toHaveBeenCalledWith(1, expect.objectContaining({ header: expect.objectContaining({ name: "Bar" }) })));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -49,7 +55,7 @@ test("shows not_one_page error on save failure", async () => {
   const { api } = await import("../api");
   (api.putSections as any).mockRejectedValueOnce({ detail: { error: "not_one_page", page_count: 2 } });
   render(<SectionFormEditor resumeId={1} payload={payload} onSaved={() => {}} />);
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /save & compile/i }));
   await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/2 page/));
 });
 
