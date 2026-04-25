@@ -33,7 +33,8 @@ test("paste LaTeX onboarding creates master", async ({ page }) => {
   await page.goto("http://localhost:5173");
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
-  // NewResumeMenu visible
+  // Empty state: click New resume to enter onboarding
+  await page.getByRole("button", { name: /new resume/i }).first().click();
   await expect(page.getByRole("form", { name: /new resume/i })).toBeVisible();
   // Switch to Paste LaTeX mode
   await page.getByRole("button", { name: /paste latex/i }).click();
