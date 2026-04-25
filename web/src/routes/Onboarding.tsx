@@ -5,6 +5,7 @@ import Button from "../components/ui/Button";
 import Field from "../components/ui/Field";
 import Input from "../components/ui/Input";
 import Glyph, { GlyphName } from "../components/ui/Glyph";
+import { useBreakpoint } from "../hooks/useBreakpoint";
 
 type Mode = "scratch" | "tex" | "pdf";
 
@@ -102,6 +103,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
+  const bp = useBreakpoint();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -157,7 +159,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
         <span style={{ color: "var(--ink)" }}>New resume</span>
       </TopChrome>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "32px 24px 80px" }}>
+        <div style={{ maxWidth: 860, margin: "0 auto", padding: "clamp(20px, 3vw, 32px) clamp(16px, 3vw, 24px) 80px" }}>
           <div className="eyebrow" style={{ marginBottom: 4 }}>Onboarding</div>
           <h1
             style={{
@@ -212,7 +214,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
               style={{
                 marginTop: 28,
                 display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr) auto",
+                gridTemplateColumns: bp === "mobile" ? "minmax(0, 1fr)" : "minmax(0, 1fr) auto",
                 gap: 24,
                 alignItems: "flex-start",
               }}

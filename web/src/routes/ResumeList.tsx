@@ -166,12 +166,14 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
       <TopChrome>Library</TopChrome>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "24px" }}>
+        <div style={{ maxWidth: 860, margin: "0 auto", padding: "clamp(16px, 3vw, 24px)" }}>
           <div
             style={{
               display: "flex",
               alignItems: "flex-end",
               justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 12,
               marginBottom: 20,
             }}
           >
