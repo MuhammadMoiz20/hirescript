@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Literal
 
@@ -21,6 +21,18 @@ class ResumeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class VariantOut(ResumeOut):
+    parent_id: int
+    job_description_id: int | None = None
+    jd_title: str | None = None
+    jd_company: str | None = None
+
+
+class ResumeGroup(BaseModel):
+    master: ResumeOut
+    variants: list[VariantOut]
+
+
 class EditRequest(BaseModel):
     instruction: str
     tier: Literal["haiku", "sonnet", "opus"] = "haiku"
@@ -28,3 +40,58 @@ class EditRequest(BaseModel):
 
 class EditAcceptRequest(BaseModel):
     proposed_latex: str
+
+
+class TailorRequest(BaseModel):
+    title: str
+    company: str
+    url: str | None = None
+    jd_text: str
+    deep_tailor: bool = False
+
+
+class SectionsResponse(BaseModel):
+    template_id: str
+    schema_: dict = Field(alias="schema")
+    content_json: dict
+    model_config = {"populate_by_name": True}
+
+
+class SectionsPutRequest(BaseModel):
+    content_json: dict
+
+
+class OnboardTexRequest(BaseModel):
+    name: str
+    latex_source: str
+
+
+class OnboardedResumeOut(ResumeOut):
+    enforced: bool
+    iterations: int
+    page_count: int
+
+
+class VersionSummary(BaseModel):
+    id: int
+    edit_source: str
+    edit_prompt: str | None
+    page_count: int
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class VersionDetail(VersionSummary):
+    resume_id: int
+    latex_source: str
+    content_json: dict
+
+
+class TailorResponse(BaseModel):
+    variant: ResumeOut
+    jd_id: int
+    page_count: int
+    iterations: int
+    enforced: bool
+    tier_history: list[str]
+    keywords_used: list[str]

@@ -1,0 +1,7 @@
+FROM node:20-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install
+COPY . .
+RUN npm run build
+# `dist/` is the Vite output; the web-build service copies it into the shared volume.

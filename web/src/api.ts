@@ -97,6 +97,122 @@ export async function acceptEdit(id: number, proposed_latex: string): Promise<Re
   return res.json();
 }
 
+export type Variant = ResumeOut & {
+  parent_id: number;
+  job_description_id: number | null;
+  jd_title: string | null;
+  jd_company: string | null;
+};
+
+export type ResumeGroup = { master: ResumeOut; variants: Variant[] };
+
+export type TailorRequest = {
+  title: string;
+  company: string;
+  url?: string;
+  jd_text: string;
+  deep_tailor?: boolean;
+};
+
+export type TailorResponse = {
+  variant: ResumeOut;
+  jd_id: number;
+  page_count: number;
+  iterations: number;
+  enforced: boolean;
+  tier_history: string[];
+  keywords_used: string[];
+};
+
+export async function tailorToJd(masterId: number, body: TailorRequest): Promise<TailorResponse> {
+  const res = await fetch(`${BASE}/resumes/${masterId}/tailor`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
+
+export async function onboardTex(name: string, latex_source: string): Promise<OnboardedResume> {
+  const res = await fetch(`${BASE}/resumes/onboard/tex`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, latex_source }),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function onboardPdf(name: string, file: File): Promise<OnboardedResume> {
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("file", file);
+  const res = await fetch(`${BASE}/resumes/onboard/pdf`, {
+    method: "POST",
+    credentials: "include",
+    body: fd,
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function listGroupedResumes(): Promise<ResumeGroup[]> {
+  const res = await fetch(`${BASE}/resumes/grouped`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export type SectionsPayload = {
+  template_id: string;
+  schema: any;
+  content_json: any;
+};
+
+export async function getSections(id: number): Promise<SectionsPayload> {
+  const res = await fetch(`${BASE}/resumes/${id}/sections`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function putSections(id: number, content_json: any): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/sections`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content_json }),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export type VersionSummary = {
+  id: number;
+  edit_source: string;
+  edit_prompt: string | null;
+  page_count: number;
+  created_at: string;
+};
+
+export async function listVersions(id: number): Promise<VersionSummary[]> {
+  const res = await fetch(`${BASE}/resumes/${id}/versions`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function rollback(id: number, versionId: number): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/versions/${versionId}/rollback`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
@@ -104,7 +220,28 @@ export const api = {
   createResume: (name: string, template_id: string) => req("/resumes", { method: "POST", body: JSON.stringify({ name, template_id }) }),
   getResume: (id: number) => req<{ id: number; name: string; latex_source: string }>(`/resumes/${id}`),
   updateResume: (id: number, latex_source: string) => req(`/resumes/${id}`, { method: "PUT", body: JSON.stringify({ latex_source }) }),
-  compileResume: (id: number) => fetch(`${BASE}/resumes/${id}/compile`, { method: "POST", credentials: "include" }).then(r => r.ok ? r.blob() : r.json().then(j => Promise.reject(j))),
+  async compileResume(id: number): Promise<{ pdf: Blob; pageCount: number }> {
+    const res = await fetch(`${BASE}/resumes/${id}/compile`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return Promise.reject(err);
+    }
+    const pdf = await res.blob();
+    const headerVal = res.headers.get("x-page-count") || res.headers.get("X-Page-Count") || "0";
+    const pageCount = parseInt(headerVal, 10) || 0;
+    return { pdf, pageCount };
+  },
   streamEdit,
   acceptEdit,
+  tailorToJd,
+  listGroupedResumes,
+  getSections,
+  putSections,
+  onboardTex,
+  onboardPdf,
+  listVersions,
+  rollback,
 };

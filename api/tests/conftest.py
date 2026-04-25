@@ -65,3 +65,28 @@ def _clear_testclient_cookies():
         edits_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_tailor_endpoint import client as tailor_client
+        tailor_client.cookies.clear()
+    except Exception:
+        pass
+    try:
+        from tests.test_sections import client as sections_client
+        sections_client.cookies.clear()
+    except Exception:
+        pass
+    try:
+        from tests.test_onboard_endpoints import client as onboard_client
+        onboard_client.cookies.clear()
+    except Exception:
+        pass
+    try:
+        from tests.test_version_snapshots import client as version_snapshots_client
+        version_snapshots_client.cookies.clear()
+    except Exception:
+        pass
+    try:
+        from tests.test_versions_endpoints import client as versions_endpoints_client
+        versions_endpoints_client.cookies.clear()
+    except Exception:
+        pass
