@@ -8,6 +8,7 @@ import ChatSidebar from "../components/ChatSidebar";
 import DiffView from "../components/DiffView";
 import SectionFormEditor from "../components/SectionFormEditor";
 import VersionHistory from "../components/VersionHistory";
+import OverflowBanner from "../components/OverflowBanner";
 
 export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [latex, setLatex] = useState("");
@@ -19,6 +20,8 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [view, setView] = useState<"form" | "latex" | "history">("form");
   const [sectionsPayload, setSectionsPayload] = useState<SectionsPayload | null>(null);
   const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [pageCount, setPageCount] = useState<number>(1);
+  const [tightening, setTightening] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -42,8 +45,9 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     setError(null);
     try {
       await save();
-      const blob = await api.compileResume(id);
-      setPdf(blob as Blob);
+      const { pdf: blob, pageCount: pc } = await api.compileResume(id);
+      setPdf(blob);
+      setPageCount(pc);
     } catch (e: any) {
       setError(e?.detail?.log || String(e));
       setPdf(null);
@@ -93,6 +97,24 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     setProposed(null);
   }
 
+  async function tighten() {
+    if (tightening) return;
+    setTightening(true);
+    try {
+      await api.streamEdit(
+        id,
+        "Tighten this resume so it fits on exactly one page. Do not drop protected terms.",
+        "haiku",
+        {
+          onResult: (result) => setProposed(result),
+          onError: (msg) => setError(msg),
+        },
+      );
+    } finally {
+      setTightening(false);
+    }
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 360px", height: "100vh" }}>
       <div style={{ display: "flex", flexDirection: "column" }}>
@@ -104,6 +126,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           <button onClick={() => switchTo("latex")} disabled={view === "latex"}>LaTeX</button>
           <button onClick={() => switchTo("history")} disabled={view === "history"}>History</button>
         </div>
+        <OverflowBanner pageCount={pageCount} onTighten={tighten} busy={tightening} />
         {view === "history" ? (
           <VersionHistory
             resumeId={id}
