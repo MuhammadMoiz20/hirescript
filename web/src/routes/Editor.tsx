@@ -147,8 +147,8 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         style={{
           flex: 1,
           display: "grid",
-          gridTemplateColumns: "48px 1fr 1fr 360px",
-          gridTemplateRows: "1fr",
+          gridTemplateColumns: "48px minmax(0, 1fr) minmax(0, 1fr) 360px",
+          gridTemplateRows: "minmax(0, 1fr)",
           minHeight: 0,
         }}
       >
