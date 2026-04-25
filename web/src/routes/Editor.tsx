@@ -12,8 +12,11 @@ import OverflowBanner from "../components/OverflowBanner";
 import TopChrome from "../components/ui/TopChrome";
 import EditorLeftRail, { EditorView } from "../components/editor/EditorLeftRail";
 import EditorToolbar from "../components/editor/EditorToolbar";
+import ChatDrawer from "../components/editor/ChatDrawer";
+import MobileTabBar, { MobileTab } from "../components/editor/MobileTabBar";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "../components/ThemeProvider";
+import { useBreakpoint } from "../hooks/useBreakpoint";
 
 export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [resumeName, setResumeName] = useState<string>("");
@@ -32,6 +35,9 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [formContent, setFormContent] = useState<any>(null);
   const { theme } = useTheme();
   const cmTheme = theme === "dark" ? githubDark : githubLight;
+  const bp = useBreakpoint();
+  const [chatOpen, setChatOpen] = useState(false);
+  const [mobileTab, setMobileTab] = useState<MobileTab>("edit");
 
   useEffect(() => {
     (async () => {
@@ -163,6 +169,162 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     }
   }
 
+  const centerView = view === "history" ? (
+    <VersionHistory
+      resumeId={id}
+      onRolledBack={(updated) => {
+        setLatex(updated.latex_source);
+        setPdf(null);
+        compile();
+        api.getSections(id).then(setSectionsPayload).catch(() => {});
+      }}
+    />
+  ) : view === "latex" ? (
+    <CodeMirror
+      value={latex}
+      extensions={[StreamLanguage.define(stex)]}
+      theme={cmTheme}
+      onChange={setLatex}
+      height="100%"
+      style={{ height: "100%" }}
+    />
+  ) : sectionsPayload ? (
+    <SectionFormEditor
+      resumeId={id}
+      payload={sectionsPayload}
+      onSaved={handleSaved}
+      onContentChange={setFormContent}
+    />
+  ) : (
+    <p style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>Loading sections…</p>
+  );
+
+  const previewPane = proposed ? (
+    <DiffView
+      currentLatex={latex}
+      proposedLatex={proposed.proposed_latex}
+      pageCount={proposed.page_count}
+      enforced={proposed.enforced}
+      removedTerms={proposed.removed_terms}
+      onAccept={handleAccept}
+      onReject={handleReject}
+      busy={accepting}
+    />
+  ) : error ? (
+    <pre
+      style={{
+        color: "var(--err)",
+        background: "var(--err-soft)",
+        border: "1px solid color-mix(in oklch, var(--err) 30%, transparent)",
+        padding: 10,
+        borderRadius: 3,
+        fontSize: 12,
+        whiteSpace: "pre-wrap",
+      }}
+    >
+      {error}
+    </pre>
+  ) : (
+    <PdfPreview pdfBlob={pdf} />
+  );
+
+  if (bp === "mobile") {
+    return (
+      <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
+        <TopChrome>
+          <span>Library</span>
+          <span style={{ color: "var(--rule-strong)" }}>/</span>
+          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
+        </TopChrome>
+        <EditorToolbar
+          resumeName={resumeName}
+          onBack={onBack}
+          onSave={save}
+          onCompile={compile}
+          saving={saving}
+          compiling={compiling}
+          pageCount={pageCount}
+        />
+        <OverflowBanner pageCount={pageCount} onTighten={tighten} busy={tightening} />
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          {mobileTab === "edit" && (
+            <>
+              <div style={{ display: "flex", borderBottom: "1px solid var(--rule)", background: "var(--paper)" }}>
+                {(["form", "latex"] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => switchTo(v)}
+                    style={{
+                      flex: 1,
+                      padding: "10px 0",
+                      fontSize: 12,
+                      fontFamily: "var(--f-mono)",
+                      color: view === v ? "var(--ink)" : "var(--ink-3)",
+                      border: "none",
+                      borderBottom: view === v ? "2px solid var(--ink)" : "2px solid transparent",
+                      background: "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {v === "form" ? "Form" : "LaTeX"}
+                  </button>
+                ))}
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                {view === "latex" ? (
+                  <CodeMirror
+                    value={latex}
+                    extensions={[StreamLanguage.define(stex)]}
+                    theme={cmTheme}
+                    onChange={setLatex}
+                    height="100%"
+                    style={{ height: "100%" }}
+                  />
+                ) : sectionsPayload ? (
+                  <SectionFormEditor
+                    resumeId={id}
+                    payload={sectionsPayload}
+                    onSaved={handleSaved}
+                    onContentChange={setFormContent}
+                  />
+                ) : (
+                  <p style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>Loading sections…</p>
+                )}
+              </div>
+            </>
+          )}
+          {mobileTab === "preview" && (
+            <div style={{ padding: 16, overflow: "auto", flex: 1, background: "var(--paper-2)" }}>
+              {previewPane}
+            </div>
+          )}
+          {mobileTab === "chat" && (
+            <ChatSidebar
+              resumeId={id}
+              onProposed={(r) => {
+                if (r.proposed_latex) setProposed(r);
+              }}
+            />
+          )}
+          {mobileTab === "history" && (
+            <VersionHistory
+              resumeId={id}
+              onRolledBack={(updated) => {
+                setLatex(updated.latex_source);
+                setPdf(null);
+                compile();
+                api.getSections(id).then(setSectionsPayload).catch(() => {});
+              }}
+            />
+          )}
+        </div>
+        <MobileTabBar value={mobileTab} onChange={setMobileTab} />
+      </div>
+    );
+  }
+
+  const isDesktop = bp === "desktop";
+
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
       <TopChrome>
@@ -175,7 +337,9 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         style={{
           flex: 1,
           display: "grid",
-          gridTemplateColumns: "48px minmax(0, 1fr) minmax(0, 1fr) 360px",
+          gridTemplateColumns: isDesktop
+            ? "48px minmax(0, 1fr) minmax(0, 1fr) 360px"
+            : "48px minmax(0, 1fr) minmax(0, 1fr)",
           gridTemplateRows: "minmax(0, 1fr)",
           minHeight: 0,
         }}
@@ -200,38 +364,11 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
             saving={saving}
             compiling={compiling}
             pageCount={pageCount}
+            onOpenChat={!isDesktop ? () => setChatOpen(true) : undefined}
           />
           <OverflowBanner pageCount={pageCount} onTighten={tighten} busy={tightening} />
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-            {view === "history" ? (
-              <VersionHistory
-                resumeId={id}
-                onRolledBack={(updated) => {
-                  setLatex(updated.latex_source);
-                  setPdf(null);
-                  compile();
-                  api.getSections(id).then(setSectionsPayload).catch(() => {});
-                }}
-              />
-            ) : view === "latex" ? (
-              <CodeMirror
-                value={latex}
-                extensions={[StreamLanguage.define(stex)]}
-                theme={cmTheme}
-                onChange={setLatex}
-                height="100%"
-                style={{ height: "100%" }}
-              />
-            ) : sectionsPayload ? (
-              <SectionFormEditor
-                resumeId={id}
-                payload={sectionsPayload}
-                onSaved={handleSaved}
-                onContentChange={setFormContent}
-              />
-            ) : (
-              <p style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>Loading sections…</p>
-            )}
+            {centerView}
           </div>
         </div>
 
@@ -245,46 +382,33 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
             minWidth: 0,
           }}
         >
-          {proposed ? (
-            <DiffView
-              currentLatex={latex}
-              proposedLatex={proposed.proposed_latex}
-              pageCount={proposed.page_count}
-              enforced={proposed.enforced}
-              removedTerms={proposed.removed_terms}
-              onAccept={handleAccept}
-              onReject={handleReject}
-              busy={accepting}
-            />
-          ) : error ? (
-            <pre
-              style={{
-                color: "var(--err)",
-                background: "var(--err-soft)",
-                border: "1px solid color-mix(in oklch, var(--err) 30%, transparent)",
-                padding: 10,
-                borderRadius: 3,
-                fontSize: 12,
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {error}
-            </pre>
-          ) : (
-            <PdfPreview pdfBlob={pdf} />
-          )}
+          {previewPane}
         </div>
 
-        {/* Chat rail */}
-        <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {/* Chat rail (desktop only) */}
+        {isDesktop && (
+          <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <ChatSidebar
+              resumeId={id}
+              onProposed={(result) => {
+                if (result.proposed_latex) setProposed(result);
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {!isDesktop && (
+        <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
           <ChatSidebar
             resumeId={id}
-            onProposed={(result) => {
-              if (result.proposed_latex) setProposed(result);
+            onProposed={(r) => {
+              if (r.proposed_latex) setProposed(r);
+              setChatOpen(false);
             }}
           />
-        </div>
-      </div>
+        </ChatDrawer>
+      )}
     </div>
   );
 }

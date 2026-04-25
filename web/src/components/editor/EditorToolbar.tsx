@@ -10,6 +10,7 @@ interface Props {
   compiling?: boolean;
   pageCount?: number | null;
   autosaveLabel?: string;
+  onOpenChat?: () => void;
 }
 
 export default function EditorToolbar({
@@ -21,6 +22,7 @@ export default function EditorToolbar({
   compiling = false,
   pageCount,
   autosaveLabel,
+  onOpenChat,
 }: Props) {
   return (
     <div
@@ -59,6 +61,11 @@ export default function EditorToolbar({
       )}
       {pageCount != null && (
         <PageCountBadge state={compiling ? "compiling" : pageCount} size="sm" />
+      )}
+      {onOpenChat && (
+        <Button size="sm" variant="ghost" icon="chat" onClick={onOpenChat} aria-label="Open chat">
+          Chat
+        </Button>
       )}
       <Button size="sm" icon="check" onClick={onSave} disabled={saving}>
         {saving ? "Saving…" : "Save"}
