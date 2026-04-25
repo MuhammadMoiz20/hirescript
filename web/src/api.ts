@@ -220,7 +220,20 @@ export const api = {
   createResume: (name: string, template_id: string) => req("/resumes", { method: "POST", body: JSON.stringify({ name, template_id }) }),
   getResume: (id: number) => req<{ id: number; name: string; latex_source: string }>(`/resumes/${id}`),
   updateResume: (id: number, latex_source: string) => req(`/resumes/${id}`, { method: "PUT", body: JSON.stringify({ latex_source }) }),
-  compileResume: (id: number) => fetch(`${BASE}/resumes/${id}/compile`, { method: "POST", credentials: "include" }).then(r => r.ok ? r.blob() : r.json().then(j => Promise.reject(j))),
+  async compileResume(id: number): Promise<{ pdf: Blob; pageCount: number }> {
+    const res = await fetch(`${BASE}/resumes/${id}/compile`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return Promise.reject(err);
+    }
+    const pdf = await res.blob();
+    const headerVal = res.headers.get("x-page-count") || res.headers.get("X-Page-Count") || "0";
+    const pageCount = parseInt(headerVal, 10) || 0;
+    return { pdf, pageCount };
+  },
   streamEdit,
   acceptEdit,
   tailorToJd,

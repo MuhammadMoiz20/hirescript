@@ -19,6 +19,8 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [view, setView] = useState<"form" | "latex" | "history">("form");
   const [sectionsPayload, setSectionsPayload] = useState<SectionsPayload | null>(null);
   const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [pageCount, setPageCount] = useState<number>(1);
+  const [tightening, setTightening] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -42,8 +44,9 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     setError(null);
     try {
       await save();
-      const blob = await api.compileResume(id);
-      setPdf(blob as Blob);
+      const { pdf: blob, pageCount: pc } = await api.compileResume(id);
+      setPdf(blob);
+      setPageCount(pc);
     } catch (e: any) {
       setError(e?.detail?.log || String(e));
       setPdf(null);
