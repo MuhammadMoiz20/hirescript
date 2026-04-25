@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, EditResult, Tier } from "../api";
+import Glyph from "./ui/Glyph";
+import Button from "./ui/Button";
+import ModelBadge, { ModelName } from "./ui/ModelBadge";
+import CompileChip from "./ui/CompileChip";
 
 type AssistantMessage = {
   role: "assistant";
@@ -18,11 +22,25 @@ interface Props {
   defaultTier?: Tier;
 }
 
+const TIER_TO_MODEL: Record<Tier, ModelName> = {
+  haiku: "haiku",
+  sonnet: "sonnet",
+  opus: "opus",
+};
+
 export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku" }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [tier, setTier] = useState<Tier>(defaultTier);
   const [streaming, setStreaming] = useState(false);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (el && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: 9e9 });
+    }
+  }, [messages]);
 
   const updateLastAssistant = (updater: (msg: AssistantMessage) => AssistantMessage) => {
     setMessages((prev) => {
@@ -78,66 +96,189 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
     }
   };
 
-  const renderSummary = (result: EditResult) => {
-    const mark = result.enforced ? "\u2713" : "\u2717";
-    const pages = `${result.page_count} page${result.page_count === 1 ? "" : "s"}`;
-    const iters = `${result.iterations} iteration${result.iterations === 1 ? "" : "s"}`;
-    const joiner = result.enforced ? "in" : "after";
-    return `${mark} ${pages} ${joiner} ${iters}`;
-  };
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minWidth: 280 }}>
-      <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
-        {messages.map((m, i) => (
+    <aside
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        background: "var(--paper)",
+      }}
+    >
+      <div
+        style={{
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--rule)",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          flexShrink: 0,
+        }}
+      >
+        <Glyph name="chat" size={13} />
+        <span style={{ fontWeight: 600, fontSize: 13 }}>Claude</span>
+        <ModelBadge model={TIER_TO_MODEL[tier]} size="sm" />
+        <span style={{ flex: 1 }} />
+        <select
+          value={tier}
+          onChange={(e) => setTier(e.target.value as Tier)}
+          disabled={streaming}
+          aria-label="Tier"
+          className="mono"
+          style={{
+            fontSize: 11,
+            background: "var(--paper-2)",
+            border: "1px solid var(--rule)",
+            color: "var(--ink-2)",
+            borderRadius: 2,
+            padding: "2px 4px",
+          }}
+        >
+          <option value="haiku">Haiku</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="opus">Opus</option>
+        </select>
+      </div>
+
+      <div
+        ref={scrollerRef}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: 14,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        {messages.length === 0 && (
           <div
-            key={i}
             style={{
-              margin: "6px 0",
-              padding: 8,
-              borderRadius: 6,
-              background: m.role === "user" ? "#eef" : "#f5f5f5",
-              whiteSpace: "pre-wrap",
+              padding: 10,
+              border: "1px dashed var(--rule-strong)",
+              borderRadius: 3,
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              color: "var(--ink-2)",
+              fontSize: 12,
+              lineHeight: 1.5,
             }}
           >
-            <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>
-              {m.role === "user" ? "You" : "Assistant"}
+            <Glyph name="sparkle" size={13} />
+            <div>
+              <b style={{ color: "var(--ink)" }}>Ask Claude</b> to edit, tighten, or tailor your
+              resume. Edits land as a reviewable diff.
             </div>
-            <div>{m.text}</div>
-            {m.role === "assistant" && m.status === "done" && m.result && (
-              <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
-                {renderSummary(m.result)}
-              </div>
-            )}
           </div>
-        ))}
+        )}
+        {messages.map((m, i) => {
+          const isLast = i === messages.length - 1;
+          if (m.role === "user") {
+            return (
+              <div
+                key={i}
+                style={{
+                  alignSelf: "flex-end",
+                  maxWidth: "85%",
+                  background: "var(--paper-2)",
+                  border: "1px solid var(--rule)",
+                  borderRadius: 3,
+                  padding: "8px 10px",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {m.text}
+              </div>
+            );
+          }
+          // assistant
+          const showCaret = isLast && streaming && m.status === "streaming";
+          return (
+            <div
+              key={i}
+              style={{
+                fontSize: 13,
+                lineHeight: 1.55,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                color: m.status === "error" ? "var(--err)" : "var(--ink)",
+              }}
+            >
+              <div className={showCaret ? "caret" : ""} style={{ whiteSpace: "pre-wrap" }}>
+                {m.text || (showCaret ? "" : m.status === "error" ? "Error" : "")}
+              </div>
+              {m.status === "done" && m.result && (
+                <CompileChip
+                  iterations={m.result.iterations}
+                  pageCount={m.result.page_count}
+                  kind="done"
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
-      <div style={{ borderTop: "1px solid #ddd", padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={streaming}
-          rows={3}
-          placeholder="Describe the edit..."
-          aria-label="Chat instruction"
-          style={{ width: "100%", resize: "vertical" }}
-        />
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value as Tier)}
+
+      <div style={{ padding: 10, borderTop: "1px solid var(--rule)", flexShrink: 0 }}>
+        <div
+          style={{
+            border: "1px solid var(--rule-strong)",
+            borderRadius: 3,
+            padding: 6,
+            background: "var(--paper)",
+          }}
+        >
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             disabled={streaming}
-            aria-label="Tier"
+            rows={3}
+            placeholder="Ask Claude to edit, tighten, or tailor…"
+            aria-label="Chat instruction"
+            style={{
+              width: "100%",
+              minHeight: 52,
+              border: "none",
+              outline: "none",
+              resize: "none",
+              background: "transparent",
+              padding: "2px 4px",
+              fontSize: 13,
+              color: "var(--ink)",
+              fontFamily: "var(--f-sans)",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "4px 4px 2px",
+            }}
           >
-            <option value="haiku">Haiku</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus</option>
-          </select>
-          <button onClick={handleSend} disabled={streaming || !input.trim()}>
-            Send
-          </button>
+            <span style={{ flex: 1 }} />
+            <Button
+              size="sm"
+              variant="primary"
+              mono
+              onClick={handleSend}
+              disabled={streaming || !input.trim()}
+            >
+              Send
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </aside>
   );
 }

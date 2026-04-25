@@ -54,10 +54,10 @@ test("chat edit → diff → accept", async ({ page }) => {
   await page.goto("http://localhost:5173");
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
-  // Default mode is "From scratch"; stay in it.
+  await page.getByRole("button", { name: /new resume|get started/i }).first().click();
+  await page.getByRole("button", { name: /start from scratch/i }).click();
   await page.getByLabel(/resume name/i).fill("EditTest");
   await page.getByRole("button", { name: /^create$/i }).click();
-  await page.getByRole("button", { name: "EditTest" }).click();
 
   // ChatSidebar textarea
   await page

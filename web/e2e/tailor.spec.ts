@@ -47,7 +47,7 @@ test("tailor flow creates a variant", async ({ page }) => {
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
   // master visible
-  await expect(page.getByRole("button", { name: /^Mtest$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Mtest$/ })).toBeVisible();
   // open tailor modal
   await page.getByRole("button", { name: /tailor to jd/i }).click();
   await expect(page.getByRole("dialog", { name: /tailor to jd/i })).toBeVisible();
@@ -58,5 +58,5 @@ test("tailor flow creates a variant", async ({ page }) => {
   await page.getByRole("button", { name: "Tailor", exact: true }).click();
   // variant appears in list
   await expect(page.getByText(/SWE @ Acme/i)).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: /Mtest — Acme/ })).toBeVisible();
+  await expect(page.getByText(/Mtest — Acme/)).toBeVisible();
 });

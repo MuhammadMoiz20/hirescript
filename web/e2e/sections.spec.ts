@@ -63,7 +63,7 @@ test("section form editor: edit header name and save", async ({ page }) => {
   await page.getByLabel(/password/i).fill("changeme");
   await page.getByRole("button", { name: /log in/i }).click();
   // Open the master
-  await page.getByRole("button", { name: "Sec" }).click();
+  await page.getByRole("button", { name: /open editor/i }).first().click();
 
   // Form view default — header Name input visible with the initial value
   const nameInput = page.getByLabel("Name", { exact: true });
