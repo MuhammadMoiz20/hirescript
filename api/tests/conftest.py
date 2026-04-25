@@ -75,3 +75,8 @@ def _clear_testclient_cookies():
         sections_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_onboard_endpoints import client as onboard_client
+        onboard_client.cookies.clear()
+    except Exception:
+        pass

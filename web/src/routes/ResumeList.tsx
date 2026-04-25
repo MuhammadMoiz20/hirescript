@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, ResumeGroup, TailorResponse } from "../api";
 import TailorModal from "../components/TailorModal";
+import NewResumeMenu from "../components/NewResumeMenu";
 
 export default function ResumeList({ onOpen }: { onOpen: (id: number) => void }) {
   const [groups, setGroups] = useState<ResumeGroup[]>([]);
-  const [name, setName] = useState("");
   const [tailorTarget, setTailorTarget] = useState<{ id: number; name: string } | null>(null);
 
   async function refresh() {
@@ -12,11 +12,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
   }
   useEffect(() => { refresh(); }, []);
 
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-    await api.createResume(name, "jakes");
-    setName("");
+  async function onMenuCreated(_r: any) {
     refresh();
   }
 
@@ -28,10 +24,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
   return (
     <div>
       <h1>Resumes</h1>
-      <form onSubmit={create}>
-        <input placeholder="New resume name" value={name} onChange={e => setName(e.target.value)} />
-        <button type="submit">Create from Jake's</button>
-      </form>
+      <NewResumeMenu onCreated={onMenuCreated} />
       <ul>
         {groups.map(group => (
           <li key={group.master.id} style={{ marginBottom: 12 }}>
