@@ -12,6 +12,8 @@ import OverflowBanner from "../components/OverflowBanner";
 import TopChrome from "../components/ui/TopChrome";
 import EditorLeftRail, { EditorView } from "../components/editor/EditorLeftRail";
 import EditorToolbar from "../components/editor/EditorToolbar";
+import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
+import { useTheme } from "../components/ThemeProvider";
 
 export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [resumeName, setResumeName] = useState<string>("");
@@ -28,6 +30,8 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [pageCount, setPageCount] = useState<number>(1);
   const [tightening, setTightening] = useState(false);
   const [formContent, setFormContent] = useState<any>(null);
+  const { theme } = useTheme();
+  const cmTheme = theme === "dark" ? githubDark : githubLight;
 
   useEffect(() => {
     (async () => {
@@ -213,6 +217,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
               <CodeMirror
                 value={latex}
                 extensions={[StreamLanguage.define(stex)]}
+                theme={cmTheme}
                 onChange={setLatex}
                 height="100%"
                 style={{ height: "100%" }}
