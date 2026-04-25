@@ -20,4 +20,20 @@ if (typeof window !== "undefined") {
   if (!window.sessionStorage || typeof window.sessionStorage.setItem !== "function") {
     Object.defineProperty(window, "sessionStorage", { value: makeStorage(), configurable: true });
   }
+  if (typeof window.matchMedia !== "function") {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  }
 }
