@@ -46,13 +46,20 @@ def _make_chunk(text: str, index: int, heading: Optional[str]) -> Chunk:
     }
 
 
-def _split_long_text(text: str) -> list[str]:
-    """Split a single string into MAX_CHARS windows with OVERLAP overlap.
+def _split_long_text(text: str, *, max_chars: int = MAX_CHARS, overlap: int = OVERLAP) -> list[str]:
+    """Split a single string into ``max_chars`` windows with ``overlap`` overlap.
 
     Tries paragraph (\n\n) boundaries first; if a single paragraph is larger
     than the window, falls back to fixed-size character slicing.
+
+    Two distinct overlap strategies live in this function:
+      - Paragraph-grouped windows: ``prev_tail`` is a "soft context bridge"
+        prepended between distinct paragraph windows (not a true sliding
+        window) and is trimmed back to ``max_chars`` to honor the contract.
+      - Oversized single-paragraph fallback: a true sliding-window byte
+        overlap that steps back ``overlap`` chars between fixed slices.
     """
-    if len(text) <= MAX_CHARS:
+    if len(text) <= max_chars:
         return [text]
 
     # First try paragraph-grouped windows.
@@ -60,22 +67,22 @@ def _split_long_text(text: str) -> list[str]:
     windows: list[str] = []
     current = ""
     for p in paragraphs:
-        if len(p) > MAX_CHARS:
+        if len(p) > max_chars:
             # Flush current first.
             if current:
                 windows.append(current)
                 current = ""
-            # Slice the oversized paragraph itself.
+            # Sliding-window byte overlap for the oversized paragraph.
             start = 0
             while start < len(p):
-                end = min(start + MAX_CHARS, len(p))
+                end = min(start + max_chars, len(p))
                 windows.append(p[start:end])
                 if end == len(p):
                     break
-                start = end - OVERLAP
+                start = end - overlap
             continue
         candidate = (current + "\n\n" + p) if current else p
-        if len(candidate) > MAX_CHARS:
+        if len(candidate) > max_chars:
             if current:
                 windows.append(current)
             current = p
@@ -84,19 +91,22 @@ def _split_long_text(text: str) -> list[str]:
     if current:
         windows.append(current)
 
-    # If paragraph-based grouping produced multiple non-overlapping windows,
-    # add character-level overlap between consecutive windows so retrieval
-    # keeps context across boundaries.
+    # Soft context bridge: prepend prev tail to subsequent windows for retrieval
+    # continuity, then trim back to max_chars so every emitted chunk satisfies
+    # the documented size contract.
     if len(windows) > 1:
         with_overlap: list[str] = [windows[0]]
         for prev, cur in zip(windows, windows[1:]):
-            tail = prev[-OVERLAP:]
-            with_overlap.append(tail + cur)
+            tail = prev[-overlap:]
+            combined = tail + cur
+            if len(combined) > max_chars:
+                combined = combined[:max_chars]
+            with_overlap.append(combined)
         return with_overlap
     return windows
 
 
-def chunk_markdown(md: str) -> list[Chunk]:
+def chunk_markdown(md: str, *, max_chars: int = MAX_CHARS, overlap: int = OVERLAP) -> list[Chunk]:
     """Chunk a markdown document for embedding.
 
     Returns an empty list for empty input. Otherwise emits chunks with a
@@ -155,7 +165,7 @@ def chunk_markdown(md: str) -> list[Chunk]:
         else:
             text = f"## {heading}\n\n{body_stripped}" if body_stripped else f"## {heading}"
 
-        if len(text) <= MAX_CHARS:
+        if len(text) <= max_chars:
             chunks.append(_make_chunk(text, idx, heading))
             idx += 1
             continue
@@ -163,7 +173,7 @@ def chunk_markdown(md: str) -> list[Chunk]:
         # Long section: split body, prepend heading line to first chunk only
         # so the heading isn't repeated, but record heading metadata on every
         # chunk. Splitting the full ``text`` keeps overlap semantics simple.
-        for piece in _split_long_text(text):
+        for piece in _split_long_text(text, max_chars=max_chars, overlap=overlap):
             chunks.append(_make_chunk(piece, idx, heading))
             idx += 1
 

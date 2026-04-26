@@ -56,6 +56,12 @@ def test_long_section_splits_with_overlap():
     assert a[-100:] == b[:100] or a[-50:] in b[:200]
 
 
+def test_no_chunk_exceeds_max_chars():
+    md = "## A\n\n" + ("x" * 1500)
+    out = chunk_markdown(md)
+    assert all(len(c["text"]) <= 800 for c in out)
+
+
 def test_indices_are_global_across_sections():
     body = "y" * 1000  # forces splitting in section A
     md = f"## A\n\n{body}\n\n## B\n\nshort body"
