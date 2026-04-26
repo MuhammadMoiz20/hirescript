@@ -19,6 +19,7 @@ dependencies = [
     "boto3==1.35.*",
     "pgvector==0.3.*",
     "voyageai==0.3.*",
+    "pylatexenc==2.10",
 ]
 
 [project.optional-dependencies]
