@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field
+import uuid
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from typing import Literal
 
@@ -117,3 +118,40 @@ class TailorResponse(BaseModel):
     enforced: bool
     tier_history: list[str]
     keywords_used: list[str]
+
+
+class TailorItem(BaseModel):
+    jd_text: str
+    title: str
+    company: str
+    url: str | None = None
+
+
+class EnqueueTailorIn(BaseModel):
+    resume_id: int
+    items: list[TailorItem]
+    deep: bool = False
+
+
+class EnqueueTailorOut(BaseModel):
+    batch_id: uuid.UUID
+    job_ids: list[uuid.UUID]
+
+
+class JobOut(BaseModel):
+    id: uuid.UUID
+    kind: str
+    status: str
+    batch_id: uuid.UUID | None
+    payload: dict
+    result: dict | None
+    attempts: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class JobListOut(BaseModel):
+    items: list[JobOut]
+    total: int

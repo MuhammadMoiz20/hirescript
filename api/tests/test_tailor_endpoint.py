@@ -60,7 +60,7 @@ def _create_master():
 def test_tailor_creates_variant_when_enforced():
     cookies, mid = _create_master()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(
@@ -69,10 +69,7 @@ def test_tailor_creates_variant_when_enforced():
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
         )
     assert r.status_code == 200
-    events = _parse_sse(r.text)
-    result_events = [d for n, d in events if n == "result"]
-    assert len(result_events) == 1
-    body = result_events[0]
+    body = r.json()
     assert body["variant"]["kind"] == "variant"
     assert "Acme" in body["variant"]["name"]
     assert body["enforced"] is True
@@ -83,7 +80,7 @@ def test_tailor_rejects_when_not_enforced():
     cookies, mid = _create_master()
     bad = _ok_result(enforced=False, page_count=2)
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=bad),
     ):
         r = client.post(
@@ -91,18 +88,16 @@ def test_tailor_rejects_when_not_enforced():
             cookies=cookies,
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
         )
-    assert r.status_code == 200
-    events = _parse_sse(r.text)
-    error_events = [d for n, d in events if n == "error"]
-    assert len(error_events) == 1
-    assert error_events[0]["error"] == "not_one_page"
-    assert error_events[0]["page_count"] == 2
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["error"] == "not_one_page"
+    assert detail["page_count"] == 2
 
 
 def test_tailor_404_on_missing_master():
     cookies = _login()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(
@@ -116,7 +111,7 @@ def test_tailor_404_on_missing_master():
 def test_tailor_400_when_target_is_variant():
     cookies, mid = _create_master()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         first_resp = client.post(
@@ -124,11 +119,10 @@ def test_tailor_400_when_target_is_variant():
             cookies=cookies,
             json={"title": "SWE", "company": "Acme", "jd_text": "JD body"},
         )
-    first_events = _parse_sse(first_resp.text)
-    first_result = next(d for n, d in first_events if n == "result")
-    variant_id = first_result["variant"]["id"]
+    assert first_resp.status_code == 200
+    variant_id = first_resp.json()["variant"]["id"]
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(

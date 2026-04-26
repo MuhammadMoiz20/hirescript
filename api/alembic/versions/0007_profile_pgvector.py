@@ -1,14 +1,14 @@
 """profile + pgvector
 
-Revision ID: 0006_profile_pgvector
-Revises: 0005_resume_version_pdf_key
+Revision ID: 0007_profile_pgvector
+Revises: 0006_jobs
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "0006_profile_pgvector"
-down_revision = "0005_resume_version_pdf_key"
+revision = "0007_profile_pgvector"
+down_revision = "0006_jobs"
 branch_labels = None
 depends_on = None
 

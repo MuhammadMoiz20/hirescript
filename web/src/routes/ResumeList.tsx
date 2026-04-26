@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, JobDescriptionOut, ResumeGroup, TailorResponse, Variant } from "../api";
+import { api, Job, JobDescriptionOut, ResumeGroup, Variant } from "../api";
 import TailorModal from "../components/TailorModal";
+import MassApplyDialog from "../components/MassApplyDialog";
 import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import KebabMenu from "../components/ui/KebabMenu";
@@ -248,6 +249,7 @@ interface MasterCardProps {
   group: ResumeGroup;
   onOpen: (id: number) => void;
   onTailor: (id: number, name: string) => void;
+  onMassApply: (id: number, name: string) => void;
   editingId: number | null;
   setEditingId: (id: number | null) => void;
   onRename: (id: number, name: string) => Promise<void>;
@@ -258,7 +260,7 @@ interface MasterCardProps {
 }
 
 function MasterCard({
-  group, onOpen, onTailor, editingId, setEditingId, onRename, onDelete, onDuplicate, onDownload, onViewJd,
+  group, onOpen, onTailor, onMassApply, editingId, setEditingId, onRename, onDelete, onDuplicate, onDownload, onViewJd,
 }: MasterCardProps) {
   const { master, variants } = group;
   return (
@@ -293,6 +295,7 @@ function MasterCard({
         <KebabMenu
           items={[
             { label: "Rename", icon: "edit", onClick: () => setEditingId(master.id) },
+            { label: "Mass apply", icon: "sparkle", onClick: () => onMassApply(master.id, master.name) },
             { label: "Download PDF", icon: "download", onClick: () => onDownload(master.id, master.name) },
             { label: "Duplicate", icon: "docs", onClick: () => onDuplicate(master.id) },
             {
@@ -346,6 +349,7 @@ function MasterCard({
 export default function ResumeList({ onOpen }: { onOpen: (id: number) => void }) {
   const [groups, setGroups] = useState<ResumeGroup[]>([]);
   const [tailorTarget, setTailorTarget] = useState<{ id: number; name: string } | null>(null);
+  const [massApplyTarget, setMassApplyTarget] = useState<{ id: number; name: string } | null>(null);
   const [view, setView] = useState<View>("library");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -361,7 +365,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
     refresh();
   }, []);
 
-  function onTailorCreated(_resp: TailorResponse) {
+  function onTailorCreated(_job: Job) {
     setTailorTarget(null);
     refresh();
   }
@@ -537,6 +541,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
                 group={g}
                 onOpen={onOpen}
                 onTailor={(id, name) => setTailorTarget({ id, name })}
+                onMassApply={(id, name) => setMassApplyTarget({ id, name })}
                 editingId={editingId}
                 setEditingId={setEditingId}
                 onRename={handleRename}
@@ -560,6 +565,15 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
           open={true}
           onClose={() => setTailorTarget(null)}
           onCreated={onTailorCreated}
+        />
+      )}
+
+      {massApplyTarget && (
+        <MassApplyDialog
+          open={true}
+          masterId={massApplyTarget.id}
+          masterName={massApplyTarget.name}
+          onClose={() => setMassApplyTarget(null)}
         />
       )}
 

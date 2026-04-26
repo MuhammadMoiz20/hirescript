@@ -1,15 +1,15 @@
 """kb_documents + kb_chunks
 
-Revision ID: 0007_kb_tables
-Revises: 0006_profile_pgvector
+Revision ID: 0008_kb_tables
+Revises: 0007_profile_pgvector
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from pgvector.sqlalchemy import Vector
 
-revision = "0007_kb_tables"
-down_revision = "0006_profile_pgvector"
+revision = "0008_kb_tables"
+down_revision = "0007_profile_pgvector"
 branch_labels = None
 depends_on = None
 
