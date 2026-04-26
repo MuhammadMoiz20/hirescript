@@ -123,11 +123,11 @@ test("posts tailor, subscribes to SSE, and finishes on done event", async () => 
   const es = MockEventSource.instances[0];
   expect(es.url).toBe("/api/jobs/job-abc/events");
 
-  // Phase event drives the status text.
+  // Phase event drives the progress panel.
   act(() => {
     es.emit("phase", { phase: "keywords_done", message: null, data: { count: 5 } });
   });
-  expect(screen.getByRole("status").textContent).toMatch(/keywords_done/);
+  expect(screen.getByText(/5 keywords/)).toBeInTheDocument();
 
   // Terminal `done` triggers getJob + onCreated.
   act(() => {
