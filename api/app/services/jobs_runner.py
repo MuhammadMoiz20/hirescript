@@ -38,8 +38,14 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Job, JobDescription, Resume
+import httpx
+
+from app.models import Company, Job, JobDescription, Resume
 from app.services.jobs_repo import emit_event
+from app.services.sources.greenhouse import (
+    fetch_company_jobs,
+    upsert_postings,
+)
 from app.services.tailor import tailor_resume
 from app.services.versioning import snapshot_resume_version
 
@@ -287,6 +293,123 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             await hb
 
 
+async def run_ingest_greenhouse_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Fetch + upsert Greenhouse postings for ``payload['company_slug']``.
+
+    Mirrors the heartbeat / terminal-status structure of
+    :func:`run_tailor_job`. On any unexpected exception, marks the job
+    ``failed`` and emits a ``failed`` event with the truncated error.
+
+    A 404 from Greenhouse is *not* an error — the fetcher returns an
+    empty list and we record a successful run with zero postings, so a
+    temporarily-broken board does not stall the scheduler.
+    """
+    hb = asyncio.create_task(_heartbeat(sf, job_id))
+    try:
+        async with sf() as s:
+            job = (
+                await s.execute(select(Job).where(Job.id == job_id))
+            ).scalar_one()
+            payload: dict[str, Any] = job.payload or {}
+            slug = payload["company_slug"]
+
+            company = (
+                await s.execute(
+                    select(Company).where(Company.slug == slug)
+                )
+            ).scalar_one_or_none()
+            company_id = company.id if company else None
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="ingest_start",
+            message=f"Fetching {slug}",
+            data={"slug": slug},
+        )
+        async with httpx.AsyncClient(timeout=30) as http:
+            postings = await fetch_company_jobs(slug, http=http)
+        await emit_event(
+            sf,
+            job_id,
+            phase="ingest_fetched",
+            message=f"Fetched {len(postings)} postings",
+            data={"count": len(postings), "slug": slug},
+        )
+
+        async with sf() as s:
+            counts = await upsert_postings(
+                s,
+                user_id=1,
+                company_id=company_id,
+                source="greenhouse",
+                postings=postings,
+            )
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="ingest_upserted",
+            message=(
+                f"created={counts['created']} "
+                f"updated={counts['updated']} "
+                f"unchanged={counts['unchanged']}"
+            ),
+            data=counts,
+        )
+
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"slug": slug, **counts},
+                )
+            )
+            await s.commit()
+
+        try:
+            await emit_event(
+                sf, job_id, phase="done", message=None, data=counts
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
+
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": str(exc)[:500]},
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message=str(exc)[:500],
+                data={"error": str(exc)[:500]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
+
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
 # Dispatch table mapping job ``kind`` -> async runner. New runners (slice 2+)
 # register themselves here so the worker supervisor stays kind-agnostic.
 # NOTE: tests must use monkeypatch.setitem(RUNNERS, kind, fake), not
@@ -295,4 +418,5 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
 # does not update what gets dispatched.
 RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "tailor": run_tailor_job,
+    "ingest_greenhouse": run_ingest_greenhouse_job,
 }

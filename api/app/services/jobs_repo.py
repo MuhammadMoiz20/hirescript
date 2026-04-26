@@ -132,6 +132,27 @@ async def emit_event(
         await s.commit()
 
 
+async def enqueue_ingest_greenhouse(
+    db: AsyncSession, *, company_slug: str
+) -> uuid.UUID:
+    """Insert a queued ``ingest_greenhouse`` job for ``company_slug``.
+
+    Caller owns the transaction (we only ``flush`` so the row is visible
+    inside their transaction; the caller commits). Returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="ingest_greenhouse",
+            status="queued",
+            payload={"company_slug": company_slug},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:
     """Mark a queued or running job as cancelled. Returns True if a row changed."""
     async with sf() as s:
