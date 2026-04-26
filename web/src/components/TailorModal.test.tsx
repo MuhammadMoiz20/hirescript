@@ -194,6 +194,7 @@ test("Cancel button calls onClose and closes the stream if open", async () => {
   fillRequired();
   fireEvent.click(screen.getByRole("button", { name: /^tailor$/i }));
   await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
+  // Cancel button is disabled while busy; simulate done so it re-enables.
   const es = MockEventSource.instances[0];
   act(() => {
     es.emit("done", {});
@@ -201,18 +202,6 @@ test("Cancel button calls onClose and closes the stream if open", async () => {
   await waitFor(() => expect(es.closed).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
   expect(onClose).toHaveBeenCalled();
-});
-
-test("Run-in-background dismisses modal mid-job without cancelling", async () => {
-  const { onClose } = setup();
-  fillRequired();
-  fireEvent.click(screen.getByRole("button", { name: /^tailor$/i }));
-  await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
-  // Footer button switches label while busy, X button is also available.
-  fireEvent.click(screen.getByRole("button", { name: /run in background/i }));
-  expect(onClose).toHaveBeenCalled();
-  // Stream is closed locally, but the worker keeps running the job.
-  expect(MockEventSource.instances[0].closed).toBe(true);
 });
 
 test("X close button dismisses modal mid-job", async () => {

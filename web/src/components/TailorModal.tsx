@@ -172,13 +172,11 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
           </p>
         )}
         {jobId && busy && (
-          <p style={{ color: "#888", fontSize: 12 }}>
-            Job {jobId.slice(0, 8)}… &middot; close to run in background, watch in /jobs
-          </p>
+          <p style={{ color: "#888", fontSize: 12 }}>Job {jobId.slice(0, 8)}…</p>
         )}
         {error && <p role="alert" style={{ color: "crimson" }}>{error}</p>}
         <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" onClick={handleClose}>{busy ? "Run in background" : "Cancel"}</button>
+          <button type="button" onClick={handleClose} disabled={busy}>Cancel</button>
           <button type="submit" disabled={!valid || busy}>{busy ? "Tailoring…" : "Tailor"}</button>
         </div>
       </form>
