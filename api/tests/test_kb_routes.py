@@ -128,10 +128,6 @@ def test_post_sync_markdown_runs_adapter(client_authed, monkeypatch):
         return {"created_or_updated": 3, "deleted": 1}
 
     monkeypatch.setattr(markdown_folder, "ingest", fake_ingest)
-    # Also patch the symbol imported into the routes module
-    from app.routes import kb as kb_routes
-
-    monkeypatch.setattr(kb_routes.markdown_folder, "ingest", fake_ingest)
 
     r = client_authed.post("/kb/sources/markdown/sync")
     assert r.status_code == 200

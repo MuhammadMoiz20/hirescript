@@ -22,6 +22,10 @@ KNOWN_SOURCES = ["latex_master", "markdown"]
 _MAX_LIMIT = 200
 
 
+# TODO(perf): collapse the per-source loop into a single grouped query
+# (select source, count(distinct doc_id), count(chunk.id), max(fetched_at)
+#  outer-join kb_chunks group_by source) once we have >2 sources or
+# >hundreds of documents. With 2 sources today this is fine.
 async def _source_counts(db: AsyncSession, user_id: int, source: str) -> tuple[int, int]:
     """Return (document_count, chunk_count) for a single source."""
     doc_count = (
@@ -31,6 +35,10 @@ async def _source_counts(db: AsyncSession, user_id: int, source: str) -> tuple[i
             )
         )
     ).scalar_one()
+    # Two-query aggregation: doc count, then chunk count joined back.
+    # TODO(slice-3): a concurrent ingest between the two queries could skew
+    # the chunk total. Currently safe — request-blocking, single user, no
+    # worker queue.
     chunk_count = (
         await db.execute(
             select(func.count(KbChunk.id))
@@ -149,6 +157,9 @@ async def delete_document(
     user_id: int = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # NOTE: SELECT unfiltered then compare user_id so cross-tenant ids return 403
+    # (not 404). Do not collapse into a user_id-filtered SELECT — that would leak
+    # the 404/403 distinction.
     doc = (
         await db.execute(select(KbDocument).where(KbDocument.id == doc_id))
     ).scalar_one_or_none()
