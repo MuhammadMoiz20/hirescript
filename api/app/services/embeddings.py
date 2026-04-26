@@ -13,6 +13,7 @@ import os
 import voyageai
 
 _BATCH_SIZE = 128
+_DEFAULT_MODEL = "voyage-3"
 
 _client: voyageai.Client | None = None
 
@@ -24,10 +25,13 @@ def _get_client() -> voyageai.Client:
     return _client
 
 
-def _voyage_embed_sync(texts: list[str], model: str = "voyage-3") -> list[list[float]]:
+def _voyage_embed_sync(texts: list[str], model: str = _DEFAULT_MODEL) -> list[list[float]]:
     return _get_client().embed(texts, model=model, input_type="document").embeddings
 
 
+# TODO(slice-2): narrow this retry to Voyage-specific transient errors
+# (rate-limit / 5xx / network) before worker tasks call embed() concurrently.
+# Bare Exception currently masks programmer errors with a wasted retry.
 async def _embed_batch(texts: list[str], model: str) -> list[list[float]]:
     """Run a single sync embed call in a thread, retrying once on any error."""
     try:
@@ -37,7 +41,7 @@ async def _embed_batch(texts: list[str], model: str) -> list[list[float]]:
         return await asyncio.to_thread(_voyage_embed_sync, texts, model)
 
 
-async def embed(texts: list[str], model: str = "voyage-3") -> list[list[float]]:
+async def embed(texts: list[str], model: str = _DEFAULT_MODEL) -> list[list[float]]:
     """Embed a list of documents, batching at 128 inputs per Voyage call."""
     out: list[list[float]] = []
     for i in range(0, len(texts), _BATCH_SIZE):
@@ -49,6 +53,6 @@ async def embed(texts: list[str], model: str = "voyage-3") -> list[list[float]]:
 async def embed_query(text: str) -> list[float]:
     """Embed a single query string (uses ``input_type='query'``)."""
     res = await asyncio.to_thread(
-        lambda: _get_client().embed([text], model="voyage-3", input_type="query")
+        lambda: _get_client().embed([text], model=_DEFAULT_MODEL, input_type="query")
     )
     return res.embeddings[0]
