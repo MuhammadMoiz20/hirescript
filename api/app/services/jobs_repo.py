@@ -67,9 +67,10 @@ async def claim_one(sf: SessionFactory, worker_id: str) -> Job | None:
             await s.commit()
             return job
 
-        # SQLite fallback — optimistic CAS on status='queued'. Combined with
-        # aiosqlite's per-connection write serialization this gives the
-        # "exactly one wins" guarantee the concurrency test relies on.
+        # SQLite fallback — correctness comes from the optimistic CAS clause
+        # `WHERE id=... AND status='queued'`: a second writer's UPDATE matches
+        # zero rows. The shared-cache StaticPool used by tests serializes
+        # writes on a single connection; production uses Postgres above.
         candidate = (
             await s.execute(
                 select(Job)
