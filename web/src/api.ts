@@ -342,7 +342,170 @@ export async function rollback(id: number, versionId: number): Promise<ResumeOut
   return res.json();
 }
 
+// ── Profile ─────────────────────────────────────────────────────────────────
+
+export type WorkAuth = {
+  citizenships: string[];
+  sponsorship_needed: Record<string, boolean>;
+  relocate_to: string[];
+};
+
+export type EmploymentType = "full_time" | "contract" | "internship";
+
+export type Position = {
+  company: string;
+  title: string;
+  start: string;
+  end: string | null;
+  location: string | null;
+  employment_type: EmploymentType;
+  description: string | null;
+};
+
+export type Education = {
+  institution: string;
+  degree: string;
+  field: string | null;
+  start: string | null;
+  end: string | null;
+};
+
+export type CompanyStage = "pre_seed" | "seed" | "series_a" | "series_b_plus" | "public";
+export type WorkMode = "remote" | "hybrid" | "onsite";
+
+export type Preferences = {
+  salary_floor_usd: number | null;
+  salary_target_usd: number | null;
+  role_families: string[];
+  dealbreakers: string[];
+  company_stages: CompanyStage[];
+  work_modes: WorkMode[];
+  cover_letter_default: boolean;
+  disclose_salary_default: boolean;
+};
+
+export type EEODefaults = {
+  gender: string | null;
+  race_ethnicity: string | null;
+  veteran: string | null;
+  disability: string | null;
+};
+
+export type Profile = {
+  legal_name: string;
+  preferred_name: string | null;
+  email: string;
+  phone: string | null;
+  address: string | null;
+  links: Record<string, string>;
+  work_auth: WorkAuth;
+  positions: Position[];
+  education: Education[];
+  languages: string[];
+  preferences: Preferences;
+  eeo: EEODefaults;
+  kill_list: string[];
+};
+
+export type ApiError = { status: number; detail?: any };
+
+async function jsonOrThrow<T>(res: Response): Promise<T> {
+  if (res.ok) return res.json() as Promise<T>;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = await res.text().catch(() => null); }
+  throw { status: res.status, detail } as ApiError;
+}
+
+export async function getProfile(): Promise<Profile> {
+  const res = await fetch(`${BASE}/profile`, { credentials: "include" });
+  return jsonOrThrow<Profile>(res);
+}
+
+export async function putProfile(profile: Profile): Promise<Profile> {
+  const res = await fetch(`${BASE}/profile`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  return jsonOrThrow<Profile>(res);
+}
+
+// ── Knowledge base ──────────────────────────────────────────────────────────
+
+export type KbSourceName = "latex_master" | "markdown";
+
+export type KbSource = {
+  source: KbSourceName | string;
+  document_count: number;
+  chunk_count: number;
+  last_synced_at: string | null;
+};
+
+export type KbSyncResult = {
+  source: string;
+  document_count: number;
+  chunk_count: number;
+  created_or_updated?: number;
+  deleted?: number;
+};
+
+export type KbDocumentItem = {
+  id: number;
+  source: string;
+  source_id: string;
+  title: string;
+  fetched_at: string | null;
+  chunk_count: number;
+  hash: string;
+};
+
+export type KbDocumentList = {
+  items: KbDocumentItem[];
+  total: number;
+};
+
+export async function getKbSources(): Promise<KbSource[]> {
+  const res = await fetch(`${BASE}/kb/sources`, { credentials: "include" });
+  return jsonOrThrow<KbSource[]>(res);
+}
+
+export async function syncKbSource(source: string): Promise<KbSyncResult> {
+  const res = await fetch(`${BASE}/kb/sources/${source}/sync`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<KbSyncResult>(res);
+}
+
+export async function getKbDocuments(opts: { source?: string; limit?: number; offset?: number } = {}): Promise<KbDocumentList> {
+  const params = new URLSearchParams();
+  if (opts.source) params.set("source", opts.source);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  const res = await fetch(`${BASE}/kb/documents${qs ? `?${qs}` : ""}`, { credentials: "include" });
+  return jsonOrThrow<KbDocumentList>(res);
+}
+
+export async function deleteKbDocument(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/kb/documents/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = null; }
+  throw { status: res.status, detail } as ApiError;
+}
+
 export const api = {
+  getProfile,
+  putProfile,
+  getKbSources,
+  syncKbSource,
+  getKbDocuments,
+  deleteKbDocument,
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
   listResumes: () => req<Array<{ id: number; name: string; template_id: string; latex_source: string; updated_at: string }>>("/resumes"),
