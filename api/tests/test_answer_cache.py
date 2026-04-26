@@ -59,6 +59,9 @@ async def test_store_then_lookup_round_trip(db_session):
         question="Why this company?",
         answer="Their work on X aligns with my interests.",
     )
+    # store() now flushes only; commit so the test validates persistence
+    # across the lookup path.
+    await db_session.commit()
     out = await lookup(db_session, user_id=1, question="Why THIS company")
     assert out == "Their work on X aligns with my interests."
 

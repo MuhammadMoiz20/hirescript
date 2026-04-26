@@ -47,11 +47,14 @@ def _dialect_name(session: AsyncSession) -> str:
 
 
 async def lookup(
-    db: AsyncSession, *, user_id: int, question: str
+    db: AsyncSession, *, user_id: int, question: str, bump: bool = True
 ) -> str | None:
     """Return the cached answer for ``question`` or ``None`` on miss.
 
-    Bumps ``last_used_at`` on hit so we can later age out stale entries.
+    When ``bump=True`` (default), updates ``last_used_at`` on hit so we can
+    later age out stale entries. The bump is FLUSHED, not committed — the
+    caller's outer transaction owns the commit. Pass ``bump=False`` to skip
+    the timestamp update entirely (e.g. when querying read-only).
     """
     h = question_hash(question)
     row = (
@@ -64,15 +67,20 @@ async def lookup(
     ).scalar_one_or_none()
     if row is None:
         return None
-    row.last_used_at = func.now()
-    await db.commit()
+    if bump:
+        row.last_used_at = func.now()
+        await db.flush()
     return row.answer_text
 
 
 async def store(
     db: AsyncSession, *, user_id: int, question: str, answer: str
 ) -> None:
-    """Insert or update the cached answer for ``question``."""
+    """Insert or update the cached answer for ``question``.
+
+    Flushes the upsert; callers must commit. This keeps the primitive
+    composable inside a larger orchestrator transaction.
+    """
     h = question_hash(question)
     if _dialect_name(db) == "sqlite":
         insert = sqlite_insert
@@ -93,4 +101,4 @@ async def store(
         },
     )
     await db.execute(stmt)
-    await db.commit()
+    await db.flush()

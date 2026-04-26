@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from sqlalchemy import select
 
@@ -101,6 +103,35 @@ async def test_cover_letter_includes_kb_chunks_in_prompt(monkeypatch, db_session
     for c in chunks:
         assert c["text"] in captured["user"]
     assert "Backend Engineer" in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_cover_letter_logs_when_over_word_cap(
+    monkeypatch, db_session, caplog
+):
+    await _ensure_user(db_session)
+    await _seed_profile(db_session)
+    posting_id = await _seed_posting(db_session)
+
+    async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
+        return []
+
+    monkeypatch.setattr(cl.kb_ingest, "retrieve", fake_retrieve)
+
+    long_text = " ".join(f"word{i}" for i in range(300))
+
+    async def fake_query_text(*, system_prompt, user_prompt, tier):
+        return long_text
+
+    monkeypatch.setattr(cl, "query_text", fake_query_text)
+
+    with caplog.at_level(logging.WARNING, logger=cl.log.name):
+        out = await cl.generate_cover_letter(
+            db_session, user_id=1, posting_id=posting_id
+        )
+
+    assert out == long_text
+    assert "exceeded 250-word soft cap" in caplog.text
 
 
 @pytest.mark.asyncio

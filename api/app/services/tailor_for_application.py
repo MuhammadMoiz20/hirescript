@@ -84,6 +84,12 @@ async def tailor_for_application(
     )
     addendum = _format_kb_chunks(list(chunks))
 
+    # TODO(slice-2-task-12): idempotency. If called twice for the same
+    # posting_id, this currently creates two JobDescription + variant Resume
+    # + ResumeVersion rows. The Task 12 orchestrator must guarantee
+    # at-most-once invocation per posting (e.g. by checking
+    # applications.posting_id before tailoring) until we add a unique
+    # constraint or a "find-or-create variant" guard here.
     result = await tailor_resume(
         master_latex=master.latex_source,
         jd_text=posting.description_text or "",

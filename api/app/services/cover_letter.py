@@ -8,6 +8,7 @@ the model has concrete facts to reach for instead of inventing them.
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,9 @@ from app.models import Company, JobPosting, Profile as ProfileModel
 from app.schemas.profile import Profile
 from app.services import kb_ingest
 from app.services.agent import query_text
+
+
+log = logging.getLogger(__name__)
 
 
 _SYSTEM_PROMPT = """\
@@ -108,11 +112,19 @@ async def generate_cover_letter(
         f"KB notes:\n{_format_kb_chunks(list(chunks))}\n"
     )
 
-    text = await query_text(
-        system_prompt=_SYSTEM_PROMPT.format(
-            legal_name=profile.legal_name or "the candidate"
-        ),
-        user_prompt=user_prompt,
-        tier="sonnet",
-    )
-    return text.strip()
+    text = (
+        await query_text(
+            system_prompt=_SYSTEM_PROMPT.format(
+                legal_name=profile.legal_name or "the candidate"
+            ),
+            user_prompt=user_prompt,
+            tier="sonnet",
+        )
+    ).strip()
+    word_count = len(text.split())
+    if word_count > 250:
+        log.warning(
+            "cover letter exceeded 250-word soft cap (got %d words)",
+            word_count,
+        )
+    return text
