@@ -56,11 +56,11 @@ export default function OnboardingChat({ onBack, initialHistory = [] }: Props) {
           },
           onTool: (event) => {
             if (event.type === "tool_use") {
-              setToolEvents((t) => [...t, `→ ${event.tool}(…)`]);
+              setToolEvents((t) => [...t, `call ${event.tool}(...)`]);
             } else if (event.type === "tool_result") {
-              setToolEvents((t) => [...t, `✓ ${event.tool}`]);
+              setToolEvents((t) => [...t, `ok ${event.tool}`]);
             } else if (event.type === "tool_error") {
-              setToolEvents((t) => [...t, `✗ ${event.tool}: ${event.error}`]);
+              setToolEvents((t) => [...t, `err ${event.tool}: ${event.error}`]);
             }
           },
           onError: (msg) => setError(msg),

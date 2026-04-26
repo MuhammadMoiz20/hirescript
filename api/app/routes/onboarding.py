@@ -47,13 +47,19 @@ async def onboarding_message(
     history = [t.model_dump() for t in body.history]
 
     async def event_stream():
-        async for event in run_onboarding_turn(
-            db=db,
-            user_id=user_id,
-            message=body.message,
-            history=history,
-        ):
-            yield event_to_sse(event)
+        try:
+            async for event in run_onboarding_turn(
+                db=db,
+                user_id=user_id,
+                message=body.message,
+                history=history,
+            ):
+                yield event_to_sse(event)
+        except Exception as exc:  # pragma: no cover - defensive
+            # Surface a final error frame so the client always sees a
+            # well-formed terminal pair (error + done) instead of a dropped
+            # connection mid-stream.
+            yield event_to_sse({"type": "error", "error": str(exc)[:500]})
         # Terminator so the client can detect a clean end-of-stream.
         yield event_to_sse({"type": "done"})
 

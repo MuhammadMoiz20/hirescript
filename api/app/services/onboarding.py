@@ -80,10 +80,6 @@ One question per turn.
 """
 
 
-class OnboardingError(RuntimeError):
-    """Raised for unrecoverable errors during an onboarding turn."""
-
-
 class OnboardingEvent(TypedDict, total=False):
     type: str  # "text" | "tool_use" | "tool_result" | "tool_error" | "done"
     text: str
@@ -191,6 +187,9 @@ async def add_kb_note_tool(
         raw_text=body,
         meta={"created_by": "onboarding"},
     )
+    # Explicit; ingest_document already commits internally — defensive against
+    # a future kb_ingest refactor that drops the internal commit.
+    await db.commit()
     return {"document_id": doc.id, "title": doc.title, "source_id": source_id}
 
 
@@ -244,8 +243,10 @@ async def _dispatch_tool(
         return ("tool_result", result, None)
     except ValueError as exc:
         # Validation / shape errors — return in-band so the agent can recover.
+        await db.rollback()
         return ("tool_error", None, str(exc))
     except Exception as exc:  # pragma: no cover - defensive
+        await db.rollback()
         return ("tool_error", None, f"{type(exc).__name__}: {exc}")
 
 
@@ -274,39 +275,34 @@ async def run_onboarding_turn(
     )
     user_prompt = _build_user_prompt(message, history)
 
-    try:
-        async for msg in query(prompt=user_prompt, options=options):
-            if not isinstance(msg, AssistantMessage):
-                continue
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    if block.text:
-                        yield {"type": "text", "text": block.text}
-                elif isinstance(block, ToolUseBlock):
+    async for msg in query(prompt=user_prompt, options=options):
+        if not isinstance(msg, AssistantMessage):
+            continue
+        for block in msg.content:
+            if isinstance(block, TextBlock):
+                if block.text:
+                    yield {"type": "text", "text": block.text}
+            elif isinstance(block, ToolUseBlock):
+                yield {
+                    "type": "tool_use",
+                    "tool": block.name,
+                    "input": dict(block.input or {}),
+                }
+                event_type, result, error = await _dispatch_tool(
+                    block, db=db, user_id=user_id
+                )
+                if event_type == "tool_result":
                     yield {
-                        "type": "tool_use",
+                        "type": "tool_result",
                         "tool": block.name,
-                        "input": dict(block.input or {}),
+                        "result": result or {},
                     }
-                    event_type, result, error = await _dispatch_tool(
-                        block, db=db, user_id=user_id
-                    )
-                    if event_type == "tool_result":
-                        yield {
-                            "type": "tool_result",
-                            "tool": block.name,
-                            "result": result or {},
-                        }
-                    else:
-                        yield {
-                            "type": "tool_error",
-                            "tool": block.name,
-                            "error": error or "tool failed",
-                        }
-    except OnboardingError:
-        raise
-    except Exception as exc:  # pragma: no cover - defensive
-        yield {"type": "tool_error", "tool": "", "error": str(exc)[:500]}
+                else:
+                    yield {
+                        "type": "tool_error",
+                        "tool": block.name,
+                        "error": error or "tool failed",
+                    }
 
 
 def event_to_sse(event: OnboardingEvent) -> str:
@@ -317,7 +313,6 @@ def event_to_sse(event: OnboardingEvent) -> str:
 
 
 __all__ = [
-    "OnboardingError",
     "OnboardingEvent",
     "SONNET_MODEL",
     "SYSTEM_PROMPT",
