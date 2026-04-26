@@ -101,23 +101,30 @@ function LabelRow({
   children,
 }: {
   label: string;
-  htmlFor: string;
+  htmlFor?: string;
   error?: string;
   children: React.ReactNode;
 }) {
+  // When `htmlFor` points to a single labelable element, render a real <label>.
+  // For section/group headings (e.g. chip groups, toggle groups) there is no
+  // single labelable target, so render a <div> with the same eyebrow styling
+  // to avoid a broken label association for screen readers and click handling.
+  const headingStyle: React.CSSProperties = { display: "block", marginBottom: 6 };
   return (
     <div>
-      <label
-        htmlFor={htmlFor}
-        className="eyebrow"
-        style={{ display: "block", marginBottom: 6 }}
-      >
-        {label}
-      </label>
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="eyebrow" style={headingStyle}>
+          {label}
+        </label>
+      ) : (
+        <div className="eyebrow" style={headingStyle}>
+          {label}
+        </div>
+      )}
       {children}
       {error && (
         <div
-          id={`${htmlFor}-error`}
+          id={htmlFor ? `${htmlFor}-error` : undefined}
           role="alert"
           style={{ marginTop: 4, fontSize: 12, color: "var(--accent)" }}
         >
@@ -313,6 +320,11 @@ export default function Profile({ onBack }: Props) {
         if (!alive) return;
         // If the email is the empty shell, clear it for editing.
         const next: ProfileType = { ...emptyProfile(), ...p };
+        // Backend GET /profile returns {"legal_name": "", "email": "unset@example.com"}
+        // when no profile row exists (see api/app/routes/profile.py EMPTY_SHELL).
+        // Clear the sentinel so the user starts with a blank email field on first visit.
+        // TODO(slice-2): replace with a server-side "profile_set: bool" flag so the
+        // frontend doesn't have to know the backend's sentinel value.
         if (p.email === "unset@example.com" && p.legal_name === "") next.email = "";
         setProfile(next);
         setLoading(false);
@@ -550,7 +562,7 @@ export default function Profile({ onBack }: Props) {
           </Section>
 
           <Section title="Work authorization">
-            <LabelRow label="Citizenships" htmlFor="citizenships">
+            <LabelRow label="Citizenships">
               <Chips
                 ariaLabel="Add citizenship"
                 placeholder="e.g. US"
@@ -569,7 +581,7 @@ export default function Profile({ onBack }: Props) {
                 }
               />
             </LabelRow>
-            <LabelRow label="Sponsorship needed (country → yes/no)" htmlFor="sponsorship">
+            <LabelRow label="Sponsorship needed (country → yes/no)">
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {Object.entries(profile.work_auth.sponsorship_needed).map(([country, val], idx) => (
                   <div key={`${country}-${idx}`} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -654,7 +666,7 @@ export default function Profile({ onBack }: Props) {
                 </div>
               </div>
             </LabelRow>
-            <LabelRow label="Open to relocate" htmlFor="relocate_to">
+            <LabelRow label="Open to relocate">
               <Chips
                 ariaLabel="Add relocate destination"
                 values={profile.work_auth.relocate_to}
@@ -794,7 +806,7 @@ export default function Profile({ onBack }: Props) {
                 />
               </LabelRow>
             </div>
-            <LabelRow label="Role families" htmlFor="role_families">
+            <LabelRow label="Role families">
               <Chips
                 ariaLabel="Add role family"
                 values={profile.preferences.role_families}
@@ -812,7 +824,7 @@ export default function Profile({ onBack }: Props) {
                 }
               />
             </LabelRow>
-            <LabelRow label="Dealbreakers" htmlFor="dealbreakers">
+            <LabelRow label="Dealbreakers">
               <Chips
                 ariaLabel="Add dealbreaker"
                 values={profile.preferences.dealbreakers}
@@ -830,7 +842,7 @@ export default function Profile({ onBack }: Props) {
                 }
               />
             </LabelRow>
-            <LabelRow label="Company stages" htmlFor="company_stages">
+            <LabelRow label="Company stages">
               <ToggleChips
                 options={COMPANY_STAGES}
                 selected={profile.preferences.company_stages}
@@ -843,7 +855,7 @@ export default function Profile({ onBack }: Props) {
                 }}
               />
             </LabelRow>
-            <LabelRow label="Work modes" htmlFor="work_modes">
+            <LabelRow label="Work modes">
               <ToggleChips
                 options={WORK_MODES}
                 selected={profile.preferences.work_modes}

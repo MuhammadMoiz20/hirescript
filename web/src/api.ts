@@ -409,6 +409,10 @@ export type Profile = {
 
 export type ApiError = { status: number; detail?: any };
 
+// TODO(slice-2): the codebase mixes two error conventions. New endpoints
+// (profile, kb) use jsonOrThrow which throws an ApiError({status, detail}).
+// Older endpoints throw plain Error(text) via req<T>(). Migrate the rest
+// to jsonOrThrow before the inbox/queue surfaces in slice 2.
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (res.ok) return res.json() as Promise<T>;
   let detail: any;
