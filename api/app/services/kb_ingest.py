@@ -9,13 +9,24 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from typing import TypedDict
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KbChunk, KbDocument
+from app.services import embeddings
 from app.services.chunking import chunk_markdown
 from app.services.embeddings import embed
+
+
+class RetrievedChunk(TypedDict):
+    text: str
+    source: str
+    title: str
+    distance: float
+    document_id: int
+    chunk_index: int
 
 
 async def ingest_document(
@@ -95,3 +106,41 @@ async def ingest_document(
     await db.commit()
     await db.refresh(doc)
     return doc
+
+
+async def retrieve(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    query: str,
+    k: int = 8,
+    source_filter: list[str] | None = None,
+) -> list[RetrievedChunk]:
+    """Return the top-``k`` chunks most similar to ``query`` by cosine distance.
+
+    Filters are scoped to ``user_id`` (single-tenant invariant) and optionally
+    to a list of source names. Results include the parent document's ``source``
+    and ``title`` plus the cosine distance for downstream re-ranking.
+    """
+    qvec = await embeddings.embed_query(query)
+    distance = KbChunk.embedding.cosine_distance(qvec).label("distance")
+    stmt = (
+        select(KbChunk, KbDocument, distance)
+        .join(KbDocument, KbChunk.document_id == KbDocument.id)
+        .where(KbDocument.user_id == user_id)
+    )
+    if source_filter:
+        stmt = stmt.where(KbDocument.source.in_(source_filter))
+    stmt = stmt.order_by(distance).limit(k)
+    rows = (await db.execute(stmt)).all()
+    return [
+        RetrievedChunk(
+            text=chunk.text,
+            source=doc.source,
+            title=doc.title,
+            distance=float(dist),
+            document_id=chunk.document_id,
+            chunk_index=chunk.chunk_index,
+        )
+        for chunk, doc, dist in rows
+    ]
