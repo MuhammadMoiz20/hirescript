@@ -20,3 +20,7 @@ api/compiled_pdfs/
 
 # OS
 .DS_Store
+
+# Debug artifacts
+/*.png
+.playwright-mcp/
