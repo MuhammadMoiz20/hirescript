@@ -164,3 +164,8 @@ def _clear_testclient_cookies():
         versions_endpoints_client.cookies.clear()
     except Exception:
         pass
+    try:
+        from tests.test_jobs_routes import client as jobs_routes_client
+        jobs_routes_client.cookies.clear()
+    except Exception:
+        pass
