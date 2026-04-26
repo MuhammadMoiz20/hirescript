@@ -153,59 +153,20 @@ export type TailorResponse = {
   keywords_used: string[];
 };
 
-export type TailorPhase =
-  | { name: "keywords_start" }
-  | { name: "keywords_done"; count: number }
-  | { name: "draft_start"; tier: string }
-  | { name: "draft_done"; chars: number }
-  | { name: "compile_start" }
-  | { name: "compile_done"; page_count: number }
-  | { name: "repair_start"; iteration: number; tier: string; page_count: number }
-  | { name: "repair_compile_done"; iteration: number; page_count: number };
-
-export interface TailorCallbacks {
-  onPhase?: (phase: TailorPhase) => void;
-  onResult?: (result: TailorResponse) => void;
-  onError?: (data: { message: string; error?: string; page_count?: number; iterations?: number }) => void;
-}
+export type TailorEnqueueResponse = { job_id: string; batch_id: string | null };
 
 export async function tailorToJd(
   masterId: number,
   body: TailorRequest,
-  cb: TailorCallbacks = {},
-  signal?: AbortSignal,
-): Promise<void> {
+): Promise<TailorEnqueueResponse> {
   const res = await fetch(`${BASE}/resumes/${masterId}/tailor`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal,
   });
-  if (!res.ok || !res.body) {
-    let payload: any;
-    try { payload = await res.json(); } catch { payload = { message: `HTTP ${res.status}` }; }
-    cb.onError?.({ message: payload?.detail?.message || payload?.message || `HTTP ${res.status}`, ...(payload?.detail || {}) });
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const event = parseSseEvent(raw);
-      if (!event) continue;
-      if (event.event === "phase") cb.onPhase?.(JSON.parse(event.data));
-      else if (event.event === "result") cb.onResult?.(JSON.parse(event.data));
-      else if (event.event === "error") cb.onError?.(JSON.parse(event.data));
-    }
-  }
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
 }
 
 export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
@@ -451,6 +412,8 @@ export const api = {
   streamEdit,
   acceptEdit,
   tailorToJd,
+  getJob,
+  cancelJob,
   listGroupedResumes,
   getSections,
   putSections,
