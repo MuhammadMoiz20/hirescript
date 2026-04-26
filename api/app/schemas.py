@@ -33,9 +33,21 @@ class ResumeGroup(BaseModel):
     variants: list[VariantOut]
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class EditRequest(BaseModel):
     instruction: str
     tier: Literal["haiku", "sonnet", "opus"] = "haiku"
+    # Latex currently visible in the editor. When provided, the backend uses
+    # this in preference to the DB-stored latex_source so that unsaved edits
+    # are reflected. Falls back to the DB value when None.
+    current_latex: str | None = None
+    # Prior turns of this chat session, oldest first. Used to give the model
+    # multi-turn context. Kept short by the client.
+    history: list[ChatTurn] = []
 
 
 class EditAcceptRequest(BaseModel):
@@ -85,6 +97,16 @@ class VersionDetail(VersionSummary):
     resume_id: int
     latex_source: str
     content_json: dict
+
+
+class JobDescriptionOut(BaseModel):
+    id: int
+    title: str
+    company: str
+    url: str | None = None
+    raw_text: str
+    created_at: datetime
+    model_config = {"from_attributes": True}
 
 
 class TailorResponse(BaseModel):

@@ -35,6 +35,20 @@ Hard rules:
 - Reuse the structural commands from the source document (do not change templates).
 - Reorder bullets to highlight what aligns to the JD; cut weak/irrelevant items.
 - No commentary outside the JSON.
+
+Bullet density rules (important — short bullets that leave half the line blank
+look unprofessional):
+- Every bullet must render as exactly one line that fills approximately
+  90-100% of the available column width (target ~95-115 visible characters
+  for typical 10-11pt resume fonts, including the leading verb).
+- If a bullet would render shorter than ~85 characters, EXPAND it with a
+  concrete metric, scope qualifier, technology, or downstream impact drawn
+  from the source resume — never invent facts that aren't in the master.
+- If a bullet would wrap to two lines, tighten phrasing (cut filler words,
+  combine clauses, drop weak qualifiers) until it fits on one line.
+- Prefer dropping a weak bullet entirely over keeping a stubby half-line one.
+- Lead each bullet with a strong action verb; avoid hedging language
+  ("helped", "assisted", "worked on") unless it is a protected term.
 """
 
 

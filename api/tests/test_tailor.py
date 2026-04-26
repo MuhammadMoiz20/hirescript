@@ -56,6 +56,19 @@ async def test_raises_when_model_returns_no_latex():
             await tailor_resume(master_latex="\\documentclass{article}\\begin{document}\\end{document}", jd_text="JD")
 
 
+async def test_system_prompt_directs_full_line_bullets(patches):
+    """Tailor must instruct the model to fill bullet lines, not stub them."""
+    _, qj, _ = patches
+    await tailor_resume(
+        master_latex="\\documentclass{article}\\begin{document}m\\end{document}",
+        jd_text="JD",
+    )
+    sp = qj.call_args.kwargs["system_prompt"].lower()
+    assert "one line" in sp
+    assert "85" in sp  # the minimum-length heuristic
+    assert "wrap" in sp  # explicit no-wrap rule
+
+
 async def test_passes_master_to_user_prompt(patches):
     _, qj, _ = patches
     await tailor_resume(master_latex="\\documentclass{article}\\begin{document}MASTER_BODY\\end{document}", jd_text="JD")

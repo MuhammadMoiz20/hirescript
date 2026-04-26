@@ -1,12 +1,12 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
-from app.models import Resume, JobDescription
+from app.models import Resume, JobDescription, ResumeVersion
 from app.schemas import (
     ResumeCreate,
     ResumeUpdate,
@@ -21,6 +21,7 @@ from app.schemas import (
     TailorResponse,
     OnboardTexRequest,
     OnboardedResumeOut,
+    JobDescriptionOut,
 )
 from app.services.agent import edit_resume, AgentError
 from app.services.compile import compile_latex, CompileError
@@ -99,7 +100,10 @@ async def onboard_tex(
     user_id: int = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await onboard_from_latex(latex=body.latex_source)
+    try:
+        result = await onboard_from_latex(latex=body.latex_source)
+    except CompileError as e:
+        raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
     resume = Resume(
         user_id=user_id,
         kind="master",
@@ -140,7 +144,10 @@ async def onboard_pdf(
     pdf_bytes = await file.read()
     if not pdf_bytes or pdf_bytes[:4] != b"%PDF":
         raise HTTPException(400, detail={"error": "not_a_pdf"})
-    result = await onboard_from_pdf(pdf_bytes=pdf_bytes)
+    try:
+        result = await onboard_from_pdf(pdf_bytes=pdf_bytes)
+    except CompileError as e:
+        raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
     resume = Resume(
         user_id=user_id,
         kind="master",
@@ -199,6 +206,72 @@ async def update_resume(resume_id: int, body: ResumeUpdate, user_id: int = Depen
     await db.refresh(r)
     return r
 
+@router.delete("/{resume_id}", status_code=204)
+async def delete_resume(
+    resume_id: int,
+    promote: int | None = Query(None),
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+
+    if r.kind == "master":
+        variants = (await db.execute(
+            select(Resume).where(Resume.parent_id == r.id, Resume.user_id == user_id)
+        )).scalars().all()
+        if variants:
+            variant_ids = [v.id for v in variants]
+            if promote is None or promote not in variant_ids:
+                raise HTTPException(
+                    400,
+                    detail={
+                        "error": "promote_required",
+                        "message": "Master has variants; pick one to promote.",
+                        "variant_ids": variant_ids,
+                    },
+                )
+            new_master = next(v for v in variants if v.id == promote)
+            new_master.kind = "master"
+            new_master.parent_id = None
+            for v in variants:
+                if v.id != new_master.id:
+                    v.parent_id = new_master.id
+            await db.flush()
+
+    await db.execute(sa_delete(ResumeVersion).where(ResumeVersion.resume_id == r.id))
+    await db.delete(r)
+    await db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/{resume_id}/duplicate", response_model=ResumeOut, status_code=201)
+async def duplicate_resume(
+    resume_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+    copy = Resume(
+        user_id=user_id,
+        kind="master",
+        parent_id=None,
+        job_description_id=None,
+        name=f"{r.name} (copy)",
+        template_id=r.template_id,
+        latex_source=r.latex_source,
+        content_json=r.content_json,
+        protected_terms=list(r.protected_terms or []),
+    )
+    db.add(copy)
+    await db.commit()
+    await db.refresh(copy)
+    return copy
+
+
 @router.post("/{resume_id}/compile")
 async def compile_resume(resume_id: int, user_id: int = Depends(require_user), db: AsyncSession = Depends(get_db)):
     r = await db.get(Resume, resume_id)
@@ -211,8 +284,45 @@ async def compile_resume(resume_id: int, user_id: int = Depends(require_user), d
     return Response(
         content=result.pdf,
         media_type="application/pdf",
-        headers={"X-Page-Count": str(result.page_count)},
+        headers={
+            "X-Page-Count": str(result.page_count),
+            "X-Overflow-Count": str(len(result.overflows)),
+        },
     )
+
+
+@router.post("/{resume_id}/repair")
+async def repair_resume(
+    resume_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run the OnePageEnforcer on the saved LaTeX. Returns the repaired
+    source and metadata; does NOT persist — the caller decides whether to
+    accept by calling PUT /resumes/{id}. This mirrors how AI chat edits flow:
+    propose → user reviews → user accepts."""
+    from app.services.enforcer import enforce_one_page
+    from app.services.protected_terms import resolve_protected_terms
+
+    r = await db.get(Resume, resume_id)
+    if r is None or r.user_id != user_id:
+        raise HTTPException(404)
+    protected = resolve_protected_terms(user_pinned=r.protected_terms or [])
+    try:
+        result = await enforce_one_page(
+            candidate_latex=r.latex_source,
+            protected_terms=protected,
+        )
+    except CompileError as e:
+        raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
+    return {
+        "latex_source": result.latex,
+        "page_count": result.page_count,
+        "overflow_count": len(result.overflows),
+        "enforced": result.enforced,
+        "iterations": result.iterations,
+        "tier_history": result.tier_history,
+    }
 
 
 @router.post("/{resume_id}/edits")
@@ -227,7 +337,9 @@ async def propose_edit(
         raise HTTPException(404)
 
     protected = resolve_protected_terms(user_pinned=resume.protected_terms or [])
-    latex_source = resume.latex_source
+    # Prefer the editor's in-memory latex when the client provides it so that
+    # unsaved edits are reflected. Falls back to the DB-stored source.
+    latex_source = body.current_latex if body.current_latex else resume.latex_source
 
     try:
         current = compile_latex(latex_source)
@@ -237,9 +349,11 @@ async def propose_edit(
 
     instruction = body.instruction
     tier = body.tier
+    history = [(t.role, t.content) for t in body.history]
 
     async def event_stream():
         import re
+        from app.services.agent import _extract_json_object
         collected: list[str] = []
         try:
             async for chunk in edit_resume(
@@ -248,18 +362,16 @@ async def propose_edit(
                 protected_terms=protected,
                 page_count_hint=page_hint,
                 tier=tier,
+                history=history,
             ):
                 collected.append(chunk)
                 yield f"event: chunk\ndata: {json.dumps({'text': chunk})}\n\n"
 
             full = "".join(collected)
 
-            # Extract a fenced ```json {...} ``` envelope, if any.
             envelope: dict | None = None
+            # 1. Preferred: ```json fenced block.
             match = re.search(r"```json\s*(\{.*?\})\s*```", full, re.DOTALL)
-            if not match:
-                # Fall back to a trailing bare JSON object.
-                match = re.search(r"(\{[^{}]*\"latex\"\s*:.*\})\s*$", full, re.DOTALL)
             if match:
                 try:
                     parsed = json.loads(match.group(1))
@@ -267,6 +379,16 @@ async def propose_edit(
                         envelope = parsed
                 except json.JSONDecodeError:
                     pass
+            # 2. Fallback: shared extractor handles bare/prose-wrapped JSON.
+            if envelope is None:
+                candidate = _extract_json_object(full)
+                if candidate.startswith("{"):
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict) and isinstance(parsed.get("latex"), str):
+                            envelope = parsed
+                    except json.JSONDecodeError:
+                        pass
 
             if envelope is None:
                 # Conversational reply only — no edit to apply.

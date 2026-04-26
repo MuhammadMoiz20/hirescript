@@ -12,7 +12,7 @@ import pytest
 
 from app.services import enforcer as enforcer_mod
 from app.services.agent import AgentError
-from app.services.compile import CompileResult
+from app.services.compile import CompileResult, OverflowHint
 from app.services.enforcer import enforce_one_page
 
 
@@ -29,6 +29,24 @@ def _compile_side_effect(page_counts: list[int]):
         return CompileResult(pdf=b"%PDF-fake", page_count=pc)
 
     return _side
+
+
+def _compile_with_overflows(sequence: list[tuple[int, tuple[OverflowHint, ...]]]):
+    """side_effect that returns CompileResults from (page_count, overflows) tuples."""
+    seq = list(sequence)
+
+    def _side(*args, **kwargs):
+        item = seq.pop(0) if seq else sequence[-1]
+        pc, overflows = item
+        return CompileResult(pdf=b"%PDF-fake", page_count=pc, overflows=overflows)
+
+    return _side
+
+
+def _hint(snippet: str = "overflowing line", pt: float = 4.5, ls: int = 42, le: int = 43):
+    return OverflowHint(
+        overflow_pt=pt, line_start=ls, line_end=le, snippet=snippet
+    )
 
 
 async def test_first_compile_is_one_page_returns_immediately():
@@ -109,7 +127,29 @@ async def test_exhausts_budget():
     assert result.page_count == 2
 
 
-async def test_agent_error_breaks_loop():
+async def test_agent_error_continues_to_next_iteration():
+    """A single bad model output should not burn the whole repair budget."""
+    fake_compile = MagicMock(side_effect=_compile_side_effect([2, 1]))
+    fake_repair = AsyncMock(
+        side_effect=[
+            AgentError("boom"),
+            {"diff": "shorter", "removed_terms": [], "rationale": "ok"},
+        ]
+    )
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="long",
+            protected_terms=[],
+        )
+    assert result.iterations == 2
+    assert result.enforced is True
+    assert result.latex == "shorter"
+    assert any("AgentError" in line or "boom" in line for line in result.log)
+
+
+async def test_all_iterations_agent_error_exhausts_budget():
     fake_compile = MagicMock(side_effect=_compile_side_effect([2]))
     fake_repair = AsyncMock(side_effect=AgentError("boom"))
     with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
@@ -118,10 +158,11 @@ async def test_agent_error_breaks_loop():
         result = await enforce_one_page(
             candidate_latex="long",
             protected_terms=[],
+            max_iterations=4,
         )
-    assert result.iterations == 1
+    assert result.iterations == 4
     assert result.enforced is False
-    assert any("AgentError" in line or "boom" in line for line in result.log)
+    assert fake_repair.await_count == 4
 
 
 async def test_passes_protected_terms_to_repair():
@@ -160,3 +201,89 @@ async def test_log_contains_iteration_notes():
     assert len(result.log) >= 2
     assert any("iteration 1" in line for line in result.log)
     assert any("iteration 2" in line for line in result.log)
+
+
+async def test_one_page_with_overflows_still_repairs():
+    """A 1-page doc with horizontal overflows must still trigger repair —
+    overflowing bullets wrap to a second line with orphan words and waste
+    space."""
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([
+        (1, (_hint("Built async FastAPI backend services in Python handling OAuth"),)),
+        (1, ()),
+    ]))
+    fake_repair = AsyncMock(
+        return_value={"diff": "tightened", "removed_terms": [], "rationale": "ok"}
+    )
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="long",
+            protected_terms=["Python", "FastAPI", "OAuth"],
+        )
+    assert result.iterations == 1
+    assert result.enforced is True
+    assert result.page_count == 1
+    assert result.overflows == ()
+    assert result.latex == "tightened"
+
+
+async def test_overflow_hints_passed_to_repair():
+    """The repair_overflow agent must receive the overflow hints so it knows
+    which lines to tighten."""
+    hints = (
+        _hint("Built async FastAPI backend services", pt=3.2, ls=42, le=44),
+        _hint("Architected Google Calendar/Canvas MCP servers", pt=8.7, ls=51, le=53),
+    )
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([
+        (1, hints),
+        (1, ()),
+    ]))
+    fake_repair = AsyncMock(
+        return_value={"diff": "tightened", "removed_terms": [], "rationale": "ok"}
+    )
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        await enforce_one_page(candidate_latex="x", protected_terms=[])
+    kwargs = fake_repair.call_args.kwargs
+    assert kwargs["overflow_hints"] is not None
+    assert len(kwargs["overflow_hints"]) == 2
+    assert kwargs["overflow_hints"][0]["overflow_pt"] == 3.2
+    assert "FastAPI" in kwargs["overflow_hints"][0]["snippet"]
+
+
+async def test_one_page_with_overflows_reports_unenforced_after_budget():
+    """If repair budget exhausts and overflows persist (page_count stays 1),
+    the result is still considered enforced for the one-page rule, but the
+    surviving overflows are surfaced so callers can warn the user."""
+    overflow = (_hint(),)
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([
+        (1, overflow), (1, overflow), (1, overflow), (1, overflow), (1, overflow),
+    ]))
+    fake_repair = AsyncMock(
+        return_value={"diff": "no help", "removed_terms": [], "rationale": "r"}
+    )
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="x", protected_terms=[], max_iterations=4,
+        )
+    assert result.iterations == 4
+    assert result.page_count == 1
+    assert result.enforced is True  # one-page rule satisfied
+    assert len(result.overflows) == 1
+
+
+async def test_clean_first_compile_skips_repair():
+    """1 page AND no overflows on first compile => no repair calls."""
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([(1, ())]))
+    fake_repair = AsyncMock()
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(candidate_latex="x", protected_terms=[])
+    assert result.iterations == 0
+    assert result.enforced is True
+    fake_repair.assert_not_called()
