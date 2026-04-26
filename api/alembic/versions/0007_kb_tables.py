@@ -45,6 +45,9 @@ def upgrade() -> None:
             "user_id", "source", "source_id", name="uq_kb_documents_user_source_id"
         ),
     )
+    op.create_index(
+        "ix_kb_documents_user_hash", "kb_documents", ["user_id", "hash"]
+    )
     op.create_table(
         "kb_chunks",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -74,4 +77,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS kb_chunks_embedding_idx")
     op.drop_table("kb_chunks")
+    op.drop_index("ix_kb_documents_user_hash", table_name="kb_documents")
     op.drop_table("kb_documents")
