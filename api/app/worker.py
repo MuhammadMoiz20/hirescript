@@ -25,10 +25,11 @@ POLL_SEC = 1.0
 async def _dispatch(sf, job, sem: asyncio.Semaphore) -> None:
     """Run a single claimed job, always releasing the semaphore on exit."""
     try:
-        if job.kind == "tailor":
-            await jobs_runner.run_tailor_job(sf, job.id)
-        else:
+        runner = jobs_runner.RUNNERS.get(job.kind)
+        if runner is None:
             log.warning("unknown job kind: %s", job.kind)
+        else:
+            await runner(sf, job.id)
     finally:
         sem.release()
 
@@ -97,7 +98,11 @@ async def main() -> None:
 
         async def _wrap(j):
             try:
-                await jobs_runner.run_tailor_job(SessionLocal, j.id)
+                runner = jobs_runner.RUNNERS.get(j.kind)
+                if runner is None:
+                    log.warning("unknown job kind: %s", j.kind)
+                else:
+                    await runner(SessionLocal, j.id)
             finally:
                 sem.release()
 

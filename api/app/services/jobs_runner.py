@@ -31,7 +31,7 @@ import contextlib
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -285,3 +285,10 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
         # warning into the worker loop.
         with contextlib.suppress(asyncio.CancelledError):
             await hb
+
+
+# Dispatch table mapping job ``kind`` -> async runner. New runners (slice 2+)
+# register themselves here so the worker supervisor stays kind-agnostic.
+RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
+    "tailor": run_tailor_job,
+}
