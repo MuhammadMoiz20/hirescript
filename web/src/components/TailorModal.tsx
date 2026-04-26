@@ -135,7 +135,26 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
 
   return (
     <div role="dialog" aria-label="Tailor to JD" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <form onSubmit={submit} style={{ background: "white", padding: 24, minWidth: 480, maxWidth: 640, borderRadius: 8 }}>
+      <form onSubmit={submit} style={{ background: "white", padding: 24, minWidth: 480, maxWidth: 640, borderRadius: 8, position: "relative" }}>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={handleClose}
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            background: "transparent",
+            border: "none",
+            fontSize: 20,
+            lineHeight: 1,
+            cursor: "pointer",
+            padding: 4,
+            color: "#666",
+          }}
+        >
+          ×
+        </button>
         <h2>Tailor "{masterName}" to a job</h2>
         <label style={{ display: "block", marginTop: 8 }}>Title <input value={title} onChange={e => setTitle(e.target.value)} /></label>
         <label style={{ display: "block", marginTop: 8 }}>Company <input value={company} onChange={e => setCompany(e.target.value)} /></label>
@@ -153,11 +172,13 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
           </p>
         )}
         {jobId && busy && (
-          <p style={{ color: "#888", fontSize: 12 }}>Job {jobId.slice(0, 8)}…</p>
+          <p style={{ color: "#888", fontSize: 12 }}>
+            Job {jobId.slice(0, 8)}… &middot; close to run in background, watch in /jobs
+          </p>
         )}
         {error && <p role="alert" style={{ color: "crimson" }}>{error}</p>}
         <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" onClick={handleClose} disabled={busy}>Cancel</button>
+          <button type="button" onClick={handleClose}>{busy ? "Run in background" : "Cancel"}</button>
           <button type="submit" disabled={!valid || busy}>{busy ? "Tailoring…" : "Tailor"}</button>
         </div>
       </form>
