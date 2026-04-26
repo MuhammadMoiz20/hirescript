@@ -15,7 +15,8 @@ The existing HireScript engine (LaTeX master resume → tailor → Tectonic comp
 | Area | Decision |
 |---|---|
 | Submission mode | A (autonomous) by default, per-job toggle to B (human-in-loop). B-mode runs the same pipeline but stops at the final submit button. |
-| Job sources | All in scope: ATS direct (Greenhouse, Lever, Ashby, Workable), aggregator APIs, LinkedIn/Indeed/Wellfound scraping (feature-flagged), email digest ingestion, URL paste, agentic discovery. Pluggable `Source` adapters behind one normalized `Job` schema. |
+| Job sources | All in scope: ATS direct (Greenhouse, Lever, Ashby, Workable), aggregator APIs, LinkedIn/Indeed/Wellfound scraping (feature-flagged), email digest ingestion, URL paste, agentic discovery, GitHub-curated lists (`SimplifyJobs/New-Grad-Positions` and similar community-maintained markdown tables). Pluggable `Source` adapters behind one normalized `Job` schema. |
+| No double-apply | Hard invariant. Every applied job is recorded with a stable identity key `(canonical_company, canonical_role_or_url)`. The submit step refuses to fire if that key already exists in `applications` with status ≠ rejected-cooldown-expired. Reposted listings (same role, new `source_job_id`) collapse to the existing key via a Haiku canonicalizer. Reapply only after the configurable cooldown (default infinite for v1; future: 90 days post-rejection). |
 | Profile / KB | Layered: structured profile (typed Pydantic, source of truth for form fields and ATS data) + free-form KB (markdown, RAG'd at tailor time, source of truth for narrative). Conversational onboarding bootstraps the profile. |
 | KB sources | Master LaTeX, Notion (scoped — specific DBs/pages, not whole vault), personal website (allow/deny path patterns), GitHub READMEs, manual markdown notes. |
 | Apply policy | Tiered: `dream` / `targeted` / `wide_net` / `skip`. Each tier has its own model, research depth, daily cap, and default submission mode. v1 ships dream + targeted; wide_net + spray added later. |
@@ -41,16 +42,19 @@ Auth model and the single-tenant invariant from CLAUDE.md (`user_id = 1`, signed
 
 Each stage is a worker task with its own retry and idempotency key. Stages are independently restartable.
 
-1. **Ingest** — source adapter fetches → normalizes → upserts `jobs` row. Dedup key: `(source, source_job_id)`. Six adapter families: `greenhouse|lever|ashby|workable` (clean APIs), `linkedin|indeed|wellfound` (scraping, feature-flagged), `email` (IMAP + Haiku extraction), `url_paste` (single-page scrape), `agentic` (Claude + web search, daily budget).
+1. **Ingest** — source adapter fetches → normalizes → upserts `jobs` row. Source-level dedup key: `(source, source_job_id)`. Adapter families: `greenhouse|lever|ashby|workable` (clean APIs), `linkedin|indeed|wellfound` (scraping, feature-flagged), `email` (IMAP + Haiku extraction), `url_paste` (single-page scrape), `agentic` (Claude + web search, daily budget), `github_curated` (community-maintained markdown tables — initial repo: `SimplifyJobs/New-Grad-Positions`; adapter clones/fetches the README, parses the rows, follows each apply link to extract the underlying ATS posting where possible so downstream submit can use the deterministic Playwright adapters; falls back to URL paste behavior for opaque destinations).
+
+   **Application-level dedup runs alongside source-level dedup.** Same role posted to multiple sources (e.g. SimplifyJobs row links to a Greenhouse posting we also poll directly) collapses to one canonical job via `(canonical_company, canonical_role_or_url)`. The canonicalizer normalizes company name (lower, strip Inc./LLC) and the apply destination URL (resolve redirects, strip tracking params); a Haiku call disambiguates only when URL canonicalization is ambiguous. Multiple `jobs` rows can map to one canonical key — the submit step uses the canonical key, not the row id.
 2. **Classify + tier** — Haiku call. Inputs: JD, profile, tier rules. Outputs: tier (`dream`/`targeted`/`wide_net`/`skip`), fit score 0–100. Skipped jobs persist but don't progress.
 3. **Research** (dream tier only) — Sonnet/Opus + web search. Per-company brief: news, funding, team, network connections, Glassdoor signal. Cached per company for 30 days.
 4. **Tailor** — existing HireScript engine. Inputs: master LaTeX, RAG'd KB chunks, structured profile, JD, tier-specific prompt. Output: tailored LaTeX → Tectonic → one-page enforcer loop → final PDF with `page_count == 1` invariant preserved.
 5. **Generate cover letter + short-answers** — same KB+profile RAG, separate prompt. Short-answers cached in `answer_cache` keyed by question hash.
 6. **Verify** — Haiku post-tailor pass. Diffs claims in the tailored resume against profile + KB. Blocks submission if it finds unsupported claims (no fabricated dates, titles, or accomplishments).
-7. **Submit** — branches on per-job mode:
+7. **Pre-submit gate** — re-check the canonical-key dedup index. If `applications` already has a row for this `(canonical_company, canonical_role_or_url)` whose status isn't past its rejection cooldown, refuse to submit and mark the job `duplicate_skipped` with a link to the prior application. This gate runs *here* (not just at ingest) so a race between two adapters ingesting the same role can't produce a double submission; the canonical key is enforced via a unique constraint on `applications`, so the DB itself rejects double inserts.
+8. **Submit** — branches on per-job mode:
    - **A** — try Playwright adapter for detected ATS. On selector failure or unknown ATS, promote to Claude browser-agent. On captcha/MFA/"are you human", pause and ping. On success, store confirmation HTML + screenshot.
    - **B** — same flow, stops at final submit button. Surfaces in review queue. One click finishes it.
-8. **Record** — write `applications` row: `(job_id, status, mode, resume_pdf_blob, cover_letter, form_payload, submitted_at, confirmation_artifacts)`.
+9. **Record** — write `applications` row: `(job_id, canonical_key, status, mode, resume_pdf_blob, cover_letter, form_payload, submitted_at, confirmation_artifacts)`. Unique index on `(user_id, canonical_key)` is the no-double-apply DB-level guarantee.
 
 **Cadence** — sources on cron (15 min for ATS/email, nightly for scraping/agentic). Apply pipeline drains continuously, gated by per-tier daily caps and Max-window headroom. Manual kick from the inbox is always available.
 
