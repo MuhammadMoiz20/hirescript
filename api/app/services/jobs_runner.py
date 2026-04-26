@@ -28,9 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,17 +48,35 @@ SessionFactory = Callable[[], AsyncSession]
 HEARTBEAT_SEC = 10
 
 
+async def _bump_heartbeat(sf: SessionFactory, job_id: uuid.UUID) -> None:
+    async with sf() as s:
+        await s.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(heartbeat_at=datetime.now(timezone.utc))
+        )
+        await s.commit()
+
+
 async def _heartbeat(sf: SessionFactory, job_id: uuid.UUID) -> None:
-    """Bump ``heartbeat_at`` every ``HEARTBEAT_SEC`` seconds until cancelled."""
+    """Bump ``heartbeat_at`` every ``HEARTBEAT_SEC`` seconds until cancelled.
+
+    Bumps once on entry so a fast-cancelled job has a non-null heartbeat.
+    Transient DB errors are logged and swallowed so a single blip does not
+    terminate the heartbeat for the rest of the run.
+    """
+    try:
+        await _bump_heartbeat(sf, job_id)
+    except Exception:  # noqa: BLE001 — best-effort, see docstring
+        logger.warning("heartbeat bump failed for job %s", job_id, exc_info=True)
     while True:
         await asyncio.sleep(HEARTBEAT_SEC)
-        async with sf() as s:
-            await s.execute(
-                update(Job)
-                .where(Job.id == job_id)
-                .values(heartbeat_at=datetime.now(timezone.utc))
+        try:
+            await _bump_heartbeat(sf, job_id)
+        except Exception:  # noqa: BLE001 — best-effort, see docstring
+            logger.warning(
+                "heartbeat bump failed for job %s", job_id, exc_info=True
             )
-            await s.commit()
 
 
 async def _is_cancelled(sf: SessionFactory, job_id: uuid.UUID) -> bool:
@@ -156,37 +177,53 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             )
             await s.commit()
 
-        await emit_event(sf, job_id, phase="done", message=None, data={})
+        # Result is committed; the done event is best-effort.
+        try:
+            await emit_event(sf, job_id, phase="done", message=None, data={})
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
 
     except asyncio.CancelledError:
         # Idempotent: only flip rows that aren't already cancelled.
-        async with sf() as s:
-            await s.execute(
-                update(Job)
-                .where(Job.id == job_id, Job.status != "cancelled")
-                .values(
-                    status="cancelled",
-                    finished_at=datetime.now(timezone.utc),
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id, Job.status != "cancelled")
+                    .values(
+                        status="cancelled",
+                        finished_at=datetime.now(timezone.utc),
+                    )
                 )
+                await s.commit()
+            await emit_event(
+                sf, job_id, phase="cancelled", message=None, data={}
             )
-            await s.commit()
-        await emit_event(sf, job_id, phase="cancelled", message=None, data={})
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal cancel handler failed for job %s", job_id
+            )
 
     except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
-        async with sf() as s:
-            await s.execute(
-                update(Job)
-                .where(Job.id == job_id)
-                .values(
-                    status="failed",
-                    finished_at=datetime.now(timezone.utc),
-                    result={"error": str(exc)[:500]},
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": str(exc)[:500]},
+                    )
                 )
+                await s.commit()
+            await emit_event(
+                sf, job_id, phase="failed", message=str(exc)[:500], data={}
             )
-            await s.commit()
-        await emit_event(
-            sf, job_id, phase="failed", message=str(exc)[:500], data={}
-        )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
 
     finally:
         hb.cancel()

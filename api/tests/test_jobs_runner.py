@@ -64,8 +64,16 @@ async def test_runs_tailor_and_succeeds(
     from app.services import jobs_runner
     from app.services.jobs_runner import run_tailor_job
 
-    async def fake_tailor(**kwargs):
-        await kwargs["on_progress"]("draft_start", {"tier": "sonnet"})
+    async def fake_tailor(
+        *,
+        master_latex,
+        jd_text,
+        user_pinned=None,
+        deep_tailor=False,
+        on_progress=None,
+    ):
+        assert on_progress is not None
+        await on_progress("draft_start", {"tier": "sonnet"})
         return _make_tailor_result()
 
     monkeypatch.setattr(jobs_runner, "tailor_resume", fake_tailor)
@@ -142,9 +150,17 @@ async def test_cancellation_between_progress_events(
 
     job_id_holder: dict = {}
 
-    async def fake_tailor(**kwargs):
+    async def fake_tailor(
+        *,
+        master_latex,
+        jd_text,
+        user_pinned=None,
+        deep_tailor=False,
+        on_progress=None,
+    ):
+        assert on_progress is not None
         # First progress event — runner persists JobEvent + checks status.
-        await kwargs["on_progress"]("draft_start", {})
+        await on_progress("draft_start", {})
         # External actor flips the job to cancelled before the next checkpoint.
         # Mirrors what jobs_repo.cancel_job does (status + finished_at).
         from datetime import datetime, timezone
@@ -156,7 +172,7 @@ async def test_cancellation_between_progress_events(
             )
             await s.commit()
         # Second progress event — _is_cancelled now returns True, raises.
-        await kwargs["on_progress"]("repair_attempt", {"iteration": 1})
+        await on_progress("repair_attempt", {"iteration": 1})
         # Should not reach here.
         return _make_tailor_result()
 
@@ -212,7 +228,14 @@ async def test_tailor_failure_marks_job_failed(
     from app.services import jobs_runner
     from app.services.jobs_runner import run_tailor_job
 
-    async def fake_tailor(**kwargs):
+    async def fake_tailor(
+        *,
+        master_latex,
+        jd_text,
+        user_pinned=None,
+        deep_tailor=False,
+        on_progress=None,
+    ):
         raise ValueError("boom")
 
     monkeypatch.setattr(jobs_runner, "tailor_resume", fake_tailor)
