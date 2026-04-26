@@ -394,7 +394,7 @@ export type EEODefaults = {
 export type Profile = {
   legal_name: string;
   preferred_name: string | null;
-  email: string;
+  email: string | null;
   phone: string | null;
   address: string | null;
   links: Record<string, string>;

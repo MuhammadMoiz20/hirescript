@@ -46,6 +46,7 @@ def test_get_profile_returns_empty_shell_when_unset():
     r = client_authed.get("/profile")
     assert r.status_code == 200
     assert r.json()["legal_name"] == ""
+    assert r.json()["email"] is None
 
 
 def test_put_profile_persists():

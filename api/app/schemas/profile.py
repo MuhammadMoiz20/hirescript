@@ -57,7 +57,7 @@ class EEODefaults(BaseModel):
 class Profile(BaseModel):
     legal_name: str
     preferred_name: Optional[str] = None
-    email: EmailStr
+    email: EmailStr | None = None
     phone: Optional[str] = None
     address: Optional[str] = None
     links: dict[str, str] = {}

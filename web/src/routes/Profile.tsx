@@ -318,14 +318,7 @@ export default function Profile({ onBack }: Props) {
     api.getProfile()
       .then((p) => {
         if (!alive) return;
-        // If the email is the empty shell, clear it for editing.
         const next: ProfileType = { ...emptyProfile(), ...p };
-        // Backend GET /profile returns {"legal_name": "", "email": "unset@example.com"}
-        // when no profile row exists (see api/app/routes/profile.py EMPTY_SHELL).
-        // Clear the sentinel so the user starts with a blank email field on first visit.
-        // TODO(slice-2): replace with a server-side "profile_set: bool" flag so the
-        // frontend doesn't have to know the backend's sentinel value.
-        if (p.email === "unset@example.com" && p.legal_name === "") next.email = "";
         setProfile(next);
         setLoading(false);
       })
@@ -476,7 +469,7 @@ export default function Profile({ onBack }: Props) {
               <TextInput
                 id="email"
                 type="email"
-                value={profile.email}
+                value={profile.email ?? ""}
                 invalid={!!errors["email"]}
                 onChange={(e) => update("email", e.target.value)}
               />

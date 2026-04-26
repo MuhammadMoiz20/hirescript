@@ -184,6 +184,35 @@ def test_onboarding_message_creates_kb_note():
     assert docs["items"][0]["source"] == "onboarding"
 
 
+def test_onboarding_partial_update_does_not_persist_sentinel_email():
+    """Regression: agent setting only legal_name must not leave email as a
+    sentinel string. The empty shell uses ``email: None`` so a partial patch
+    merges cleanly and ``GET /profile`` reflects ``email: null``.
+    """
+    cookies = _login()
+    msgs = [
+        _assistant_message(
+            _tool_use(
+                "update_profile_fields",
+                {"patch": {"legal_name": "Moiz"}},
+            ),
+        ),
+        _assistant_message(_text("Recorded.")),
+    ]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    with patch("app.services.onboarding.query", fake_query):
+        r = client.post(
+            "/onboarding/message",
+            json={"message": "I'm Moiz.", "history": []},
+            cookies=cookies,
+        )
+    assert r.status_code == 200
+
+    p = client.get("/profile", cookies=cookies).json()
+    assert p["legal_name"] == "Moiz"
+    assert p["email"] is None
+
+
 def test_onboarding_rejects_invalid_profile_patch():
     cookies = _login()
     # Seed a valid profile first so we can prove it didn't get clobbered.

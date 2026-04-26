@@ -7,7 +7,7 @@ vi.mock("../api", () => ({
     streamOnboarding: vi.fn(),
     getProfile: vi.fn(async () => ({
       legal_name: "",
-      email: "unset@example.com",
+      email: null,
     })),
   },
 }));

@@ -46,7 +46,7 @@ from app.services.kb_ingest import ingest_document
 
 SONNET_MODEL = "claude-sonnet-4-6"
 
-EMPTY_PROFILE = {"legal_name": "", "email": "unset@example.com"}
+EMPTY_PROFILE = {"legal_name": "", "email": None}
 
 
 SYSTEM_PROMPT = """\

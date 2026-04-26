@@ -9,7 +9,7 @@ from app.schemas.profile import Profile
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
-EMPTY_SHELL = {"legal_name": "", "email": "unset@example.com"}
+EMPTY_SHELL = {"legal_name": "", "email": None}
 
 
 @router.get("", response_model=Profile)
