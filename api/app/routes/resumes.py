@@ -33,7 +33,6 @@ from app.services.parser_jakes import parse_jakes
 from app.services.protected_terms import resolve_protected_terms
 from app.services.renderer_jakes import render_jakes
 from app.services import jobs_runner
-from app.services.tailor import tailor_resume, TailorResult
 from app.services.versioning import snapshot_resume_version
 from app.templates import get_template
 from app.templates.jakes_schema import get_section_schema
