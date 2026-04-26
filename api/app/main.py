@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import User
-from app.routes import auth, resumes, versions, jds
+from app.routes import auth, resumes, versions, jds, profile
 from app.services.storage import ensure_bucket
 
 log = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ app.include_router(auth.router)
 app.include_router(resumes.router)
 app.include_router(versions.router)
 app.include_router(jds.router)
+app.include_router(profile.router)
 
 @app.get("/health")
 def health():
