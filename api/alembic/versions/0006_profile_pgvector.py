@@ -16,7 +16,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.create_table(
-        "profile",
+        "profiles",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
             "user_id",
@@ -41,4 +41,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("profile")
+    op.drop_table("profiles")

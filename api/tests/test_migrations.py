@@ -16,5 +16,5 @@ async def test_pgvector_extension_present():
 @pytest.mark.asyncio
 async def test_profile_table_exists():
     async with engine.connect() as conn:
-        result = await conn.execute(text("SELECT to_regclass('profile')"))
-        assert result.scalar() == "profile"
+        result = await conn.execute(text("SELECT to_regclass('profiles')"))
+        assert result.scalar() == "profiles"

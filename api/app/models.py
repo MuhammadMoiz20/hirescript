@@ -84,7 +84,7 @@ class ResumeVersion(Base):
 
 
 class Profile(Base):
-    __tablename__ = "profile"
+    __tablename__ = "profiles"
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     data: Mapped[dict] = mapped_column(
