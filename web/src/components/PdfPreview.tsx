@@ -6,10 +6,11 @@ import Glyph from "./ui/Glyph";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 3;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.2;
 const DEFAULT_ZOOM = 1.0;
+const PAGE_PADDING = 32; // matches the 16px padding on the scroll container, both sides
 
 /**
  * Custom PDF preview rendered via pdf.js so we get:
@@ -21,12 +22,36 @@ const DEFAULT_ZOOM = 1.0;
 export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
+  const pagesInnerRef = useRef<HTMLDivElement>(null);
+  const pageNativeWidthRef = useRef<number | null>(null);
   const [doc, setDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
+  // zoom = the user-facing target scale; renderedZoom = the scale the canvases
+  // were last rasterized at. While they differ we apply a CSS transform on the
+  // pages wrapper so dragging cmd+wheel feels smooth, then re-rasterize on
+  // idle for crisp text.
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  const [renderedZoom, setRenderedZoom] = useState(DEFAULT_ZOOM);
+  const [autoFit, setAutoFit] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
+  // Compute the zoom that fits the current page width inside the scroll
+  // container. Returns null if we don't yet know the native page width.
+  const computeFitZoom = useCallback(() => {
+    const node = pagesRef.current;
+    const w = pageNativeWidthRef.current;
+    if (!node || !w) return null;
+    const available = node.clientWidth - PAGE_PADDING;
+    if (available <= 0) return null;
+    return clampZoom(available / w);
+  }, []);
+
+  const setUserZoom = useCallback((updater: (z: number) => number) => {
+    setAutoFit(false);
+    setZoom((z) => clampZoom(updater(z)));
+  }, []);
 
   // Trackpad pinch-zoom on macOS sends ctrlKey=true wheel events; the same
   // works for Ctrl/Cmd + scroll on a regular mouse. We hook them on the scroll
@@ -37,12 +62,13 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
     function onWheel(e: WheelEvent) {
       if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
+      setAutoFit(false);
       // deltaY > 0 means scrolling down / pinch-in; sensitivity tuned by /200.
       setZoom((z) => clampZoom(+(z * (1 - e.deltaY / 200)).toFixed(3)));
     }
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [pdfBlob, error]);
 
   // Two-finger pinch on touchscreens: track the distance between the two
   // pointers and scale zoom proportionally. Uses Pointer Events for
@@ -74,6 +100,7 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
       if (pointers.size === 2 && startDist > 0) {
         e.preventDefault();
         const ratio = distance() / startDist;
+        setAutoFit(false);
         setZoom(clampZoom(+(startZoom * ratio).toFixed(3)));
       }
     }
@@ -93,7 +120,7 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
       node.removeEventListener("pointercancel", onUp);
       node.removeEventListener("pointerleave", onUp);
     };
-  }, [zoom]);
+  }, [zoom, pdfBlob, error]);
 
   // Load the document whenever the blob changes.
   useEffect(() => {
@@ -124,17 +151,66 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
     };
   }, [pdfBlob]);
 
+  // Capture the natural page width (at scale=1) so we can compute fit-to-width.
+  useEffect(() => {
+    if (!doc) {
+      pageNativeWidthRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const page = await doc.getPage(1);
+      if (cancelled) return;
+      pageNativeWidthRef.current = page.getViewport({ scale: 1 }).width;
+      if (autoFit) {
+        const fit = computeFitZoom();
+        if (fit != null) {
+          setZoom(fit);
+          setRenderedZoom(fit);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, autoFit, computeFitZoom]);
+
+  // Refit on container resize while in autoFit mode.
+  useEffect(() => {
+    const node = pagesRef.current;
+    if (!node) return;
+    const ro = new ResizeObserver(() => {
+      if (!autoFit) return;
+      const fit = computeFitZoom();
+      if (fit != null) {
+        setZoom(fit);
+        setRenderedZoom(fit);
+      }
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [autoFit, computeFitZoom]);
+
+  // Debounce rasterization: while the user is mid-zoom, only the CSS transform
+  // updates (cheap, GPU-accelerated). Once they stop briefly, snap renderedZoom
+  // to the target and re-rasterize so text stays crisp.
+  useEffect(() => {
+    if (zoom === renderedZoom) return;
+    const t = setTimeout(() => setRenderedZoom(zoom), 140);
+    return () => clearTimeout(t);
+  }, [zoom, renderedZoom]);
+
   // Render all pages on doc/zoom change.
   useEffect(() => {
-    if (!doc || !pagesRef.current) return;
-    const host = pagesRef.current;
+    if (!doc || !pagesInnerRef.current) return;
+    const host = pagesInnerRef.current;
     let cancelled = false;
     (async () => {
       host.innerHTML = "";
       for (let i = 1; i <= doc.numPages; i++) {
         if (cancelled) return;
         const page = await doc.getPage(i);
-        const viewport = page.getViewport({ scale: zoom });
+        const viewport = page.getViewport({ scale: renderedZoom });
 
         const pageWrap = document.createElement("div");
         pageWrap.style.position = "relative";
@@ -177,7 +253,7 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
         textLayerDiv.style.height = `${viewport.height}px`;
         textLayerDiv.style.width = `${viewport.width}px`;
         // CSS variable used by pdfjs's text-layer stylesheet to scale glyphs.
-        textLayerDiv.style.setProperty("--scale-factor", String(zoom));
+        textLayerDiv.style.setProperty("--scale-factor", String(renderedZoom));
         pageWrap.appendChild(textLayerDiv);
 
         const textContent = await page.getTextContent();
@@ -198,7 +274,7 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
     return () => {
       cancelled = true;
     };
-  }, [doc, zoom]);
+  }, [doc, renderedZoom]);
 
   // Track fullscreen state so the button label updates if the user exits via Esc.
   useEffect(() => {
@@ -210,14 +286,24 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
   }, []);
 
   const zoomIn = useCallback(
-    () => setZoom((z) => Math.min(MAX_ZOOM, +(z + ZOOM_STEP).toFixed(2))),
-    [],
+    () => setUserZoom((z) => +(z + ZOOM_STEP).toFixed(2)),
+    [setUserZoom],
   );
   const zoomOut = useCallback(
-    () => setZoom((z) => Math.max(MIN_ZOOM, +(z - ZOOM_STEP).toFixed(2))),
-    [],
+    () => setUserZoom((z) => +(z - ZOOM_STEP).toFixed(2)),
+    [setUserZoom],
   );
-  const zoomReset = useCallback(() => setZoom(DEFAULT_ZOOM), []);
+  // Reset = re-enable auto fit-to-width.
+  const zoomReset = useCallback(() => {
+    setAutoFit(true);
+    const fit = computeFitZoom();
+    if (fit != null) {
+      setZoom(fit);
+      setRenderedZoom(fit);
+    } else {
+      setZoom(DEFAULT_ZOOM);
+    }
+  }, [computeFitZoom]);
   const toggleFullscreen = useCallback(async () => {
     const el = containerRef.current;
     if (!el) return;
@@ -264,7 +350,7 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
         <button
           type="button"
           onClick={zoomReset}
-          title="Reset zoom"
+          title="Fit to width"
           style={{
             minWidth: 52,
             padding: "4px 6px",
@@ -301,7 +387,16 @@ export default function PdfPreview({ pdfBlob }: { pdfBlob: Blob | null }) {
             padding: 16,
             background: "var(--paper-2)",
           }}
-        />
+        >
+          <div
+            ref={pagesInnerRef}
+            style={{
+              transform: zoom !== renderedZoom ? `scale(${zoom / renderedZoom})` : undefined,
+              transformOrigin: "top center",
+              willChange: zoom !== renderedZoom ? "transform" : undefined,
+            }}
+          />
+        </div>
       )}
     </div>
   );
