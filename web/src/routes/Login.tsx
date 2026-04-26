@@ -30,17 +30,17 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
         display: "grid",
         placeItems: "center",
         background: "var(--paper)",
-        padding: 24,
+        padding: "clamp(16px, 4vw, 24px)",
       }}
     >
       <form
         onSubmit={submit}
         style={{
-          width: 420,
+          width: "min(420px, 100%)",
           background: "var(--paper-2)",
           border: "1px solid var(--rule)",
           borderRadius: 4,
-          padding: "32px 24px",
+          padding: "clamp(20px, 4vw, 32px) clamp(16px, 3vw, 24px)",
           display: "flex",
           flexDirection: "column",
           gap: 18,

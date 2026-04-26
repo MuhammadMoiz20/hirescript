@@ -2,17 +2,27 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import TailorModal from "./TailorModal";
 
+const okResult = {
+  variant: { id: 5, name: "M — Acme", template_id: "jakes", kind: "variant", latex_source: "", updated_at: "" },
+  jd_id: 1,
+  page_count: 1,
+  iterations: 0,
+  enforced: true,
+  tier_history: [],
+  keywords_used: ["python"],
+};
+
 vi.mock("../api", () => ({
   api: {
-    tailorToJd: vi.fn(async () => ({
-      variant: { id: 5, name: "M — Acme", template_id: "jakes", kind: "variant", latex_source: "", updated_at: "" },
-      jd_id: 1,
-      page_count: 1,
-      iterations: 0,
-      enforced: true,
-      tier_history: [],
-      keywords_used: ["python"],
-    })),
+    tailorToJd: vi.fn(async (_id: number, _body: any, cb: any) => {
+      cb.onPhase?.({ name: "keywords_start" });
+      cb.onPhase?.({ name: "keywords_done", count: 5 });
+      cb.onPhase?.({ name: "draft_start", tier: "sonnet" });
+      cb.onPhase?.({ name: "draft_done", chars: 4200 });
+      cb.onPhase?.({ name: "compile_start" });
+      cb.onPhase?.({ name: "compile_done", page_count: 1 });
+      cb.onResult?.(okResult);
+    }),
   },
 }));
 
@@ -37,20 +47,29 @@ test("submit disabled until required fields filled", () => {
   expect(screen.getByRole("button", { name: /^tailor$/i })).not.toBeDisabled();
 });
 
-test("calls tailorToJd and onCreated on success", async () => {
+test("calls tailorToJd, streams phases, and onCreated on success", async () => {
   const { onCreated } = setup();
   fireEvent.change(screen.getByLabelText(/title/i), { target: { value: "SWE" } });
   fireEvent.change(screen.getByLabelText(/company/i), { target: { value: "Acme" } });
   fireEvent.change(screen.getByLabelText(/job description/i), { target: { value: "JD body" } });
   fireEvent.click(screen.getByRole("button", { name: /^tailor$/i }));
   const { api } = await import("../api");
-  await waitFor(() => expect(api.tailorToJd).toHaveBeenCalledWith(1, expect.objectContaining({ company: "Acme" })));
+  await waitFor(() =>
+    expect(api.tailorToJd).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ company: "Acme" }),
+      expect.objectContaining({ onPhase: expect.any(Function), onResult: expect.any(Function) }),
+      expect.any(AbortSignal),
+    ),
+  );
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
 });
 
-test("shows not_one_page error", async () => {
+test("shows not_one_page error from onError callback", async () => {
   const { api } = await import("../api");
-  (api.tailorToJd as any).mockRejectedValueOnce({ detail: { error: "not_one_page", page_count: 2, iterations: 4 } });
+  (api.tailorToJd as any).mockImplementationOnce(async (_id: number, _body: any, cb: any) => {
+    cb.onError?.({ error: "not_one_page", page_count: 2, iterations: 4, message: "Tailored resume came out at 2 pages after 4 repair attempts." });
+  });
   setup();
   fireEvent.change(screen.getByLabelText(/title/i), { target: { value: "x" } });
   fireEvent.change(screen.getByLabelText(/company/i), { target: { value: "y" } });

@@ -13,10 +13,20 @@ whatever the model returned and recompiles.
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+from dataclasses import asdict
 
 from app.services.agent import AgentError, ModelTier, repair_overflow
-from app.services.compile import compile_latex
+from app.services.compile import compile_latex, OverflowHint
+
+ProgressFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _noop(event: str, data: dict[str, Any]) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -28,6 +38,15 @@ class EnforceResult:
     enforced: bool
     tier_history: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
+    overflows: tuple[OverflowHint, ...] = ()
+
+
+def _hints_payload(overflows: tuple[OverflowHint, ...]) -> list[dict]:
+    return [asdict(o) for o in overflows]
+
+
+def _is_clean(page_count: int, overflows: tuple[OverflowHint, ...]) -> bool:
+    return page_count == 1 and not overflows
 
 
 def _tier_for_iteration(iter_index: int) -> ModelTier:
@@ -40,21 +59,35 @@ async def enforce_one_page(
     candidate_latex: str,
     protected_terms: list[str],
     max_iterations: int = 4,
+    on_progress: ProgressFn | None = None,
 ) -> EnforceResult:
     """Compile ``candidate_latex`` and, if it is multi-page, repair-loop.
 
     Returns the best attempt. ``enforced=True`` iff the final compile was
     exactly one page.
+
+    ``on_progress`` is called at each phase boundary with one of:
+      ("compile_start",   {})
+      ("compile_done",    {"page_count": int})
+      ("repair_start",    {"iteration": int, "tier": str, "page_count": int})
+      ("repair_compile_done", {"iteration": int, "page_count": int})
     """
+    progress = on_progress or _noop
     log: list[str] = []
     tier_history: list[str] = []
 
     current_latex = candidate_latex
+    await progress("compile_start", {})
     compile_result = await asyncio.to_thread(compile_latex, current_latex)
     current_pdf = compile_result.pdf
     current_page_count = compile_result.page_count
+    current_overflows = compile_result.overflows
+    await progress(
+        "compile_done",
+        {"page_count": current_page_count, "overflows": len(current_overflows)},
+    )
 
-    if current_page_count == 1:
+    if _is_clean(current_page_count, current_overflows):
         return EnforceResult(
             latex=current_latex,
             pdf=current_pdf,
@@ -63,6 +96,7 @@ async def enforce_one_page(
             enforced=True,
             tier_history=[],
             log=[],
+            overflows=(),
         )
 
     last_diff = ""
@@ -74,7 +108,17 @@ async def enforce_one_page(
         iterations = iter_index
         log.append(
             f"iteration {iter_index}: page_count={current_page_count}, "
+            f"overflows={len(current_overflows)}, "
             f"calling repair_overflow tier={tier}"
+        )
+        await progress(
+            "repair_start",
+            {
+                "iteration": iter_index,
+                "tier": tier,
+                "page_count": current_page_count,
+                "overflows": len(current_overflows),
+            },
         )
 
         try:
@@ -84,10 +128,17 @@ async def enforce_one_page(
                 page_count=current_page_count,
                 protected_terms=protected_terms,
                 tier=tier,
+                overflow_hints=_hints_payload(current_overflows),
             )
         except AgentError as exc:
-            log.append(f"iteration {iter_index}: AgentError {exc}; aborting loop")
-            break
+            msg = f"iteration {iter_index}: AgentError {exc}; continuing to next iteration"
+            log.append(msg)
+            print(f"[enforce_one_page] {msg}", file=sys.stderr)
+            await progress(
+                "repair_failed",
+                {"iteration": iter_index, "error": str(exc)[:200]},
+            )
+            continue
 
         revised_latex = repair["diff"]
         last_diff = revised_latex
@@ -96,12 +147,22 @@ async def enforce_one_page(
         compile_result = await asyncio.to_thread(compile_latex, current_latex)
         current_pdf = compile_result.pdf
         current_page_count = compile_result.page_count
+        current_overflows = compile_result.overflows
 
         log.append(
-            f"iteration {iter_index}: post-repair page_count={current_page_count}"
+            f"iteration {iter_index}: post-repair page_count={current_page_count}, "
+            f"overflows={len(current_overflows)}"
+        )
+        await progress(
+            "repair_compile_done",
+            {
+                "iteration": iter_index,
+                "page_count": current_page_count,
+                "overflows": len(current_overflows),
+            },
         )
 
-        if current_page_count == 1:
+        if _is_clean(current_page_count, current_overflows):
             return EnforceResult(
                 latex=current_latex,
                 pdf=current_pdf,
@@ -110,6 +171,7 @@ async def enforce_one_page(
                 enforced=True,
                 tier_history=tier_history,
                 log=log,
+                overflows=(),
             )
 
     return EnforceResult(
@@ -117,7 +179,8 @@ async def enforce_one_page(
         pdf=current_pdf,
         page_count=current_page_count,
         iterations=iterations,
-        enforced=False,
+        enforced=current_page_count == 1,  # one-page rule satisfied even if overflows remain
         tier_history=tier_history,
         log=log,
+        overflows=current_overflows,
     )

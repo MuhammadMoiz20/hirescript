@@ -144,6 +144,46 @@ async def test_repair_overflow_parses_json_envelope():
     assert result["rationale"] == "ok"
 
 
+async def test_repair_overflow_tolerates_json_fences():
+    """Models often wrap output in ```json ... ``` despite instructions."""
+    payload = (
+        "```json\n"
+        '{"diff":"\\\\documentclass{article}","removed_terms":[],"rationale":"ok"}\n'
+        "```"
+    )
+    msgs = [_assistant_message(payload)]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    with patch.object(agent_mod, "query", fake_query):
+        result = await repair_overflow(
+            current_latex="x",
+            last_diff="d",
+            page_count=2,
+            protected_terms=[],
+            tier="sonnet",
+        )
+    assert result["diff"] == "\\documentclass{article}"
+
+
+async def test_repair_overflow_extracts_object_from_prose():
+    """If the model adds prose around the JSON, extract the first object."""
+    payload = (
+        "Here is the revised resume:\n"
+        '{"diff":"X","removed_terms":[],"rationale":"r"}\n'
+        "Hope that helps."
+    )
+    msgs = [_assistant_message(payload)]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    with patch.object(agent_mod, "query", fake_query):
+        result = await repair_overflow(
+            current_latex="x",
+            last_diff="d",
+            page_count=2,
+            protected_terms=[],
+            tier="sonnet",
+        )
+    assert result["diff"] == "X"
+
+
 async def test_repair_overflow_raises_on_invalid_json():
     msgs = [_assistant_message("not json")]
     fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
@@ -171,3 +211,47 @@ async def test_repair_overflow_raises_when_protected_term_removed():
                 protected_terms=["led"],
                 tier="sonnet",
             )
+
+
+async def test_repair_overflow_includes_overflow_hints_in_prompt():
+    """When overflow_hints are provided, the user prompt must list each
+    offending bullet so the model knows which lines to tighten."""
+    payload = '{"diff":"X","removed_terms":[],"rationale":"r"}'
+    msgs = [_assistant_message(payload)]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    hints = [
+        {"overflow_pt": 12.34, "line_start": 42, "line_end": 44,
+         "snippet": "Built async FastAPI services in Python handling OAuth"},
+        {"overflow_pt": 3.5, "line_start": 51, "line_end": 52,
+         "snippet": "Architected MCP servers"},
+    ]
+    with patch.object(agent_mod, "query", fake_query):
+        await repair_overflow(
+            current_latex="x",
+            last_diff="d",
+            page_count=1,
+            protected_terms=[],
+            tier="haiku",
+            overflow_hints=hints,
+        )
+    user_prompt = fake_query.call_args.kwargs["prompt"]
+    assert "Horizontal overflow" in user_prompt
+    assert "FastAPI" in user_prompt
+    assert "12.3pt" in user_prompt
+    assert "lines 42-44" in user_prompt
+    # 1-page case must use the 1-page-with-overflow situation copy
+    assert "already fits on 1 page" in user_prompt
+
+
+async def test_repair_overflow_omits_hints_block_when_none():
+    payload = '{"diff":"X","removed_terms":[],"rationale":"r"}'
+    msgs = [_assistant_message(payload)]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    with patch.object(agent_mod, "query", fake_query):
+        await repair_overflow(
+            current_latex="x", last_diff="d", page_count=2,
+            protected_terms=[], tier="haiku",
+        )
+    user_prompt = fake_query.call_args.kwargs["prompt"]
+    assert "Horizontal overflow" not in user_prompt
+    assert "compiles to 2 pages" in user_prompt

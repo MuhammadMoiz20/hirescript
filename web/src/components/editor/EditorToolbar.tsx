@@ -6,10 +6,13 @@ interface Props {
   onBack: () => void;
   onSave: () => void;
   onCompile: () => void;
+  onDownload?: () => void;
   saving?: boolean;
   compiling?: boolean;
+  downloading?: boolean;
   pageCount?: number | null;
   autosaveLabel?: string;
+  onOpenChat?: () => void;
 }
 
 export default function EditorToolbar({
@@ -17,10 +20,13 @@ export default function EditorToolbar({
   onBack,
   onSave,
   onCompile,
+  onDownload,
   saving = false,
   compiling = false,
+  downloading = false,
   pageCount,
   autosaveLabel,
+  onOpenChat,
 }: Props) {
   return (
     <div
@@ -60,12 +66,29 @@ export default function EditorToolbar({
       {pageCount != null && (
         <PageCountBadge state={compiling ? "compiling" : pageCount} size="sm" />
       )}
+      {onOpenChat && (
+        <Button size="sm" variant="ghost" icon="chat" onClick={onOpenChat} aria-label="Open chat">
+          Chat
+        </Button>
+      )}
       <Button size="sm" icon="check" onClick={onSave} disabled={saving}>
         {saving ? "Saving…" : "Save"}
       </Button>
       <Button size="sm" variant="primary" icon="compile" onClick={onCompile} disabled={compiling}>
         {compiling ? "Compiling…" : "Compile"}
       </Button>
+      {onDownload && (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="download"
+          onClick={onDownload}
+          disabled={downloading}
+          aria-label="Download PDF"
+        >
+          {downloading ? "Preparing…" : "Download"}
+        </Button>
+      )}
     </div>
   );
 }

@@ -25,10 +25,17 @@ export type EditResult = {
   kind?: "chat" | "edit";
 };
 
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
 export type EditCallbacks = {
   onChunk?: (text: string) => void;
   onResult?: (result: EditResult) => void;
   onError?: (message: string) => void;
+};
+
+export type EditOptions = {
+  currentLatex?: string;
+  history?: ChatTurn[];
 };
 
 export type ResumeOut = {
@@ -38,6 +45,21 @@ export type ResumeOut = {
   kind: string;
   latex_source: string;
   updated_at: string;
+};
+
+export type JobDescriptionOut = {
+  id: number;
+  title: string;
+  company: string;
+  url: string | null;
+  raw_text: string;
+  created_at: string;
+};
+
+export type DeletePromoteRequired = {
+  error: "promote_required";
+  message: string;
+  variant_ids: number[];
 };
 
 function parseSseEvent(raw: string): { event: string; data: string } | null {
@@ -57,12 +79,16 @@ export async function streamEdit(
   tier: Tier = "haiku",
   cb: EditCallbacks = {},
   signal?: AbortSignal,
+  opts: EditOptions = {},
 ): Promise<void> {
+  const body: Record<string, unknown> = { instruction, tier };
+  if (typeof opts.currentLatex === "string") body.current_latex = opts.currentLatex;
+  if (opts.history && opts.history.length) body.history = opts.history;
   const res = await fetch(`${BASE}/resumes/${id}/edits`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ instruction, tier }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok || !res.body) {
@@ -127,15 +153,59 @@ export type TailorResponse = {
   keywords_used: string[];
 };
 
-export async function tailorToJd(masterId: number, body: TailorRequest): Promise<TailorResponse> {
+export type TailorPhase =
+  | { name: "keywords_start" }
+  | { name: "keywords_done"; count: number }
+  | { name: "draft_start"; tier: string }
+  | { name: "draft_done"; chars: number }
+  | { name: "compile_start" }
+  | { name: "compile_done"; page_count: number }
+  | { name: "repair_start"; iteration: number; tier: string; page_count: number }
+  | { name: "repair_compile_done"; iteration: number; page_count: number };
+
+export interface TailorCallbacks {
+  onPhase?: (phase: TailorPhase) => void;
+  onResult?: (result: TailorResponse) => void;
+  onError?: (data: { message: string; error?: string; page_count?: number; iterations?: number }) => void;
+}
+
+export async function tailorToJd(
+  masterId: number,
+  body: TailorRequest,
+  cb: TailorCallbacks = {},
+  signal?: AbortSignal,
+): Promise<void> {
   const res = await fetch(`${BASE}/resumes/${masterId}/tailor`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(body),
+    signal,
   });
-  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
-  return res.json();
+  if (!res.ok || !res.body) {
+    let payload: any;
+    try { payload = await res.json(); } catch { payload = { message: `HTTP ${res.status}` }; }
+    cb.onError?.({ message: payload?.detail?.message || payload?.message || `HTTP ${res.status}`, ...(payload?.detail || {}) });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = parseSseEvent(raw);
+      if (!event) continue;
+      if (event.event === "phase") cb.onPhase?.(JSON.parse(event.data));
+      else if (event.event === "result") cb.onResult?.(JSON.parse(event.data));
+      else if (event.event === "error") cb.onError?.(JSON.parse(event.data));
+    }
+  }
 }
 
 export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
@@ -162,6 +232,62 @@ export async function onboardPdf(name: string, file: File): Promise<OnboardedRes
   });
   if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
   return res.json();
+}
+
+export async function deleteResume(id: number, promote?: number): Promise<void> {
+  const qs = promote != null ? `?promote=${promote}` : "";
+  const res = await fetch(`${BASE}/resumes/${id}${qs}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let payload: any;
+  try { payload = await res.json(); } catch { payload = { message: `HTTP ${res.status}` }; }
+  const detail = payload?.detail ?? payload;
+  throw detail;
+}
+
+export async function duplicateResume(id: number): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/duplicate`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function renameResume(id: number, name: string): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function getJd(id: number): Promise<JobDescriptionOut> {
+  const res = await fetch(`${BASE}/jds/${id}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function downloadResumePdf(id: number, name: string): Promise<void> {
+  const res = await fetch(`${BASE}/resumes/${id}/compile`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name.replace(/[^\w.-]+/g, "_")}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function listGroupedResumes(): Promise<ResumeGroup[]> {
@@ -223,7 +349,7 @@ export const api = {
   createResume: (name: string, template_id: string) => req("/resumes", { method: "POST", body: JSON.stringify({ name, template_id }) }),
   getResume: (id: number) => req<{ id: number; name: string; latex_source: string }>(`/resumes/${id}`),
   updateResume: (id: number, latex_source: string) => req(`/resumes/${id}`, { method: "PUT", body: JSON.stringify({ latex_source }) }),
-  async compileResume(id: number): Promise<{ pdf: Blob; pageCount: number }> {
+  async compileResume(id: number): Promise<{ pdf: Blob; pageCount: number; overflowCount: number }> {
     const res = await fetch(`${BASE}/resumes/${id}/compile`, {
       method: "POST",
       credentials: "include",
@@ -233,9 +359,24 @@ export const api = {
       return Promise.reject(err);
     }
     const pdf = await res.blob();
-    const headerVal = res.headers.get("x-page-count") || res.headers.get("X-Page-Count") || "0";
-    const pageCount = parseInt(headerVal, 10) || 0;
-    return { pdf, pageCount };
+    const pageCount = parseInt(res.headers.get("x-page-count") || "0", 10) || 0;
+    const overflowCount = parseInt(res.headers.get("x-overflow-count") || "0", 10) || 0;
+    return { pdf, pageCount, overflowCount };
+  },
+  async repairResume(id: number): Promise<{
+    latex_source: string;
+    page_count: number;
+    overflow_count: number;
+    enforced: boolean;
+    iterations: number;
+    tier_history: string[];
+  }> {
+    const res = await fetch(`${BASE}/resumes/${id}/repair`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+    return res.json();
   },
   streamEdit,
   acceptEdit,
@@ -247,4 +388,9 @@ export const api = {
   onboardPdf,
   listVersions,
   rollback,
+  deleteResume,
+  duplicateResume,
+  renameResume,
+  getJd,
+  downloadResumePdf,
 };

@@ -36,6 +36,41 @@ test("disables Send while streaming", async () => {
   await waitFor(() => expect((screen.getByRole("button", { name: /send/i }) as HTMLButtonElement).disabled).toBe(true));
 });
 
+test("clear button removes prior messages", async () => {
+  const onProposed = vi.fn();
+  render(<ChatSidebar resumeId={1} onProposed={onProposed} />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Tighten everything" } });
+  fireEvent.click(screen.getByRole("button", { name: /send/i }));
+  await waitFor(() => expect(screen.getByText(/Hello/)).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /clear chat/i }));
+  await waitFor(() => expect(screen.queryByText(/Hello/)).not.toBeInTheDocument());
+  expect(screen.queryByText(/Tighten everything/)).not.toBeInTheDocument();
+});
+
+test("sends history and currentLatex on follow-up turns", async () => {
+  const { api } = await import("../api");
+  (api.streamEdit as any).mockClear();
+  render(
+    <ChatSidebar
+      resumeId={1}
+      onProposed={() => {}}
+      getCurrentLatex={() => "\\documentclass{article}"}
+    />,
+  );
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "first turn" } });
+  fireEvent.click(screen.getByRole("button", { name: /send/i }));
+  await waitFor(() => expect(screen.getByText(/Hello/)).toBeInTheDocument());
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "second turn" } });
+  fireEvent.click(screen.getByRole("button", { name: /send/i }));
+  await waitFor(() => expect((api.streamEdit as any).mock.calls.length).toBeGreaterThanOrEqual(2));
+  const secondCall = (api.streamEdit as any).mock.calls[1];
+  // signature: (id, instruction, tier, cb, signal, opts)
+  const opts = secondCall[5];
+  expect(opts.currentLatex).toBe("\\documentclass{article}");
+  expect(opts.history.length).toBeGreaterThanOrEqual(2);
+  expect(opts.history[0]).toEqual({ role: "user", content: "first turn" });
+});
+
 test("shows error when onError fires", async () => {
   const { api } = await import("../api");
   (api.streamEdit as any).mockImplementationOnce(async (_id: number, _i: string, _t: any, cb: any) => {
