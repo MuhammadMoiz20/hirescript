@@ -51,7 +51,7 @@ def test_grouped_includes_variant_with_jd_info():
     from app.services.tailor import TailorResult
     cookies = _login()
     master = client.post("/resumes", json={"name": "WithJD", "template_id": "jakes"}, cookies=cookies).json()
-    with patch("app.routes.resumes.tailor_resume", new=AsyncMock(return_value=TailorResult(
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
         variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
         pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
         tier_history=[], keywords_used=["python"],
@@ -86,7 +86,7 @@ def test_delete_master_with_variants_requires_promote():
     from app.services.tailor import TailorResult
     cookies = _login()
     master = client.post("/resumes", json={"name": "Mstr", "template_id": "jakes"}, cookies=cookies).json()
-    with patch("app.routes.resumes.tailor_resume", new=AsyncMock(return_value=TailorResult(
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
         variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
         pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
         tier_history=[], keywords_used=[],
@@ -105,7 +105,7 @@ def test_delete_master_promotes_variant():
     from app.services.tailor import TailorResult
     cookies = _login()
     master = client.post("/resumes", json={"name": "Mstr2", "template_id": "jakes"}, cookies=cookies).json()
-    with patch("app.routes.resumes.tailor_resume", new=AsyncMock(return_value=TailorResult(
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
         variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
         pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
         tier_history=[], keywords_used=[],
@@ -141,12 +141,11 @@ def test_duplicate_resume():
 
 
 def test_get_jd():
-    import json as _json
     from unittest.mock import patch, AsyncMock
     from app.services.tailor import TailorResult
     cookies = _login()
     master = client.post("/resumes", json={"name": "JDR", "template_id": "jakes"}, cookies=cookies).json()
-    with patch("app.routes.resumes.tailor_resume", new=AsyncMock(return_value=TailorResult(
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
         variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
         pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
         tier_history=[], keywords_used=[],
@@ -155,12 +154,8 @@ def test_get_jd():
             "title": "SWE", "company": "Acme", "url": "https://x.test/job",
             "jd_text": "We need engineers",
         })
-    jd_id = None
-    for raw in resp.text.split("\n\n"):
-        if "event: result" in raw:
-            data_line = next(l for l in raw.split("\n") if l.startswith("data:"))
-            jd_id = _json.loads(data_line.split(":", 1)[1].strip())["jd_id"]
-            break
+    assert resp.status_code == 200
+    jd_id = resp.json()["jd_id"]
     assert jd_id is not None
     r = client.get(f"/jds/{jd_id}", cookies=cookies)
     assert r.status_code == 200

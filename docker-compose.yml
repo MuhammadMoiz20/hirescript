@@ -42,6 +42,23 @@ services:
       minio:
         condition: service_healthy
 
+  worker:
+    build: ./api
+    platform: linux/amd64
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment:
+      - WORKER_CONCURRENCY=4
+    volumes:
+      - ./api:/app
+      - pdfs:/app/compiled_pdfs
+      - ${HOME}/.claude:/root/.claude
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   web:
     build: ./web
     ports: ["5173:5173"]

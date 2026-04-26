@@ -1,12 +1,14 @@
 import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select, delete as sa_delete, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone
 from app.auth import require_user
-from app.db import get_db
-from app.models import Resume, JobDescription, ResumeVersion
+from app.db import SessionLocal, get_db
+from app.models import Job, Resume, JobDescription, ResumeVersion
 from app.schemas import (
     ResumeCreate,
     ResumeUpdate,
@@ -30,7 +32,7 @@ from app.services.onboard import onboard_from_pdf, onboard_from_latex
 from app.services.parser_jakes import parse_jakes
 from app.services.protected_terms import resolve_protected_terms
 from app.services.renderer_jakes import render_jakes
-from app.services.tailor import tailor_resume, TailorResult
+from app.services import jobs_runner
 from app.services.versioning import snapshot_resume_version
 from app.templates import get_template
 from app.templates.jakes_schema import get_section_schema
@@ -539,111 +541,96 @@ async def tailor_endpoint(
     user_id: int = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Enqueue a tailor job for ``master_id`` against the given JD.
+
+    Production: enqueues a single-job batch on the queue and returns
+    ``{"job_id", "batch_id"}``; the worker container picks it up and the
+    client streams progress from ``/api/jobs/{job_id}/events``.
+
+    Tests / dev (``JOBS_INLINE=1``): enqueues, then claims and runs the
+    job synchronously in-process via ``jobs_runner.run_tailor_job``. On
+    success the route returns the legacy ``TailorResponse`` JSON shape
+    (variant + jd_id + page_count etc.) so existing callers keep working.
+    """
     master = await db.get(Resume, master_id)
     if master is None or master.user_id != user_id:
         raise HTTPException(404)
     if master.kind != "master":
         raise HTTPException(400, detail={"error": "not_a_master_resume"})
 
-    master_latex = master.latex_source
-    master_id_local = master.id
-    master_name = master.name
-    master_template_id = master.template_id
-    master_protected = list(master.protected_terms or [])
+    job = Job(
+        kind="tailor",
+        status="queued",
+        payload={
+            "resume_id": master.id,
+            "jd_text": body.jd_text,
+            "title": body.title,
+            "company": body.company,
+            "url": body.url,
+            "deep": body.deep_tailor,
+        },
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
 
-    import asyncio as _asyncio
+    if os.environ.get("JOBS_INLINE") != "1":
+        # Production: hand off to the worker container.
+        return {"job_id": str(job.id), "batch_id": None}
 
-    queue: _asyncio.Queue = _asyncio.Queue()
+    # Inline mode: claim the row in-process and run the runner synchronously.
+    await db.execute(
+        sa_update(Job)
+        .where(Job.id == job.id)
+        .values(
+            status="running",
+            worker_id="inline",
+            started_at=datetime.now(timezone.utc),
+            heartbeat_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
 
-    async def on_progress(name: str, data: dict) -> None:
-        await queue.put(("phase", {"name": name, **data}))
+    await jobs_runner.run_tailor_job(SessionLocal, job.id)
 
-    async def runner():
-        try:
-            result: TailorResult = await tailor_resume(
-                master_latex=master_latex,
-                jd_text=body.jd_text,
-                user_pinned=master_protected,
-                deep_tailor=body.deep_tailor,
-                on_progress=on_progress,
-            )
-            if not result.enforced:
-                await queue.put((
-                    "error",
-                    {
+    # Reload the terminal row with a fresh session — `db` may have stale state.
+    async with SessionLocal() as s:
+        finished = (
+            await s.execute(select(Job).where(Job.id == job.id))
+        ).scalar_one()
+        status = finished.status
+        result = finished.result or {}
+
+        if status == "failed":
+            if result.get("error") == "not_one_page":
+                raise HTTPException(
+                    422,
+                    detail={
                         "error": "not_one_page",
-                        "page_count": result.page_count,
-                        "iterations": result.iterations,
-                        "message": (
-                            f"Tailored resume came out at {result.page_count} pages "
-                            f"after {result.iterations} repair attempts."
-                        ),
+                        "page_count": result.get("page_count", 0),
+                        "iterations": result.get("iterations", 0),
                     },
-                ))
-                return
-
-            jd = JobDescription(
-                user_id=user_id,
-                title=body.title,
-                company=body.company,
-                url=body.url,
-                raw_text=body.jd_text,
-                parsed_json={"keywords": result.keywords_used},
+                )
+            raise HTTPException(
+                500, detail={"error": result.get("error", "tailor_failed")}
             )
-            db.add(jd)
-            await db.flush()
-
-            variant = Resume(
-                user_id=user_id,
-                parent_id=master_id_local,
-                kind="variant",
-                name=f"{master_name} \u2014 {body.company}",
-                template_id=master_template_id,
-                latex_source=result.variant_latex,
-                job_description_id=jd.id,
-                protected_terms=master_protected,
+        if status == "cancelled":
+            raise HTTPException(409, detail={"error": "cancelled"})
+        if status != "succeeded":
+            raise HTTPException(
+                500, detail={"error": "tailor_did_not_complete", "status": status}
             )
-            db.add(variant)
-            await db.flush()
-            await snapshot_resume_version(
-                db=db,
-                resume=variant,
-                page_count=result.page_count,
-                edit_source="ai_tailor",
-                edit_prompt=f"{body.title} @ {body.company}",
-                pdf_bytes=result.pdf,
-            )
-            await db.commit()
-            await db.refresh(variant)
 
-            payload = TailorResponse(
-                variant=ResumeOut.model_validate(variant),
-                jd_id=jd.id,
-                page_count=result.page_count,
-                iterations=result.iterations,
-                enforced=result.enforced,
-                tier_history=result.tier_history,
-                keywords_used=result.keywords_used,
-            ).model_dump(mode="json")
-            await queue.put(("result", payload))
-        except AgentError as exc:
-            await queue.put(("error", {"message": str(exc)[:500]}))
-        except Exception as exc:  # pragma: no cover - defensive
-            await queue.put(("error", {"message": str(exc)[:500]}))
-        finally:
-            await queue.put(None)
+        variant = (
+            await s.execute(select(Resume).where(Resume.id == result["variant_id"]))
+        ).scalar_one()
 
-    async def event_stream():
-        task = _asyncio.create_task(runner())
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                event_name, data = item
-                yield f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return TailorResponse(
+            variant=ResumeOut.model_validate(variant),
+            jd_id=result["jd_id"],
+            page_count=result["page_count"],
+            iterations=result["iterations"],
+            enforced=result["enforced"],
+            tier_history=result["tier_history"],
+            keywords_used=result["keywords_used"],
+        )

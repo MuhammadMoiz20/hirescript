@@ -153,59 +153,20 @@ export type TailorResponse = {
   keywords_used: string[];
 };
 
-export type TailorPhase =
-  | { name: "keywords_start" }
-  | { name: "keywords_done"; count: number }
-  | { name: "draft_start"; tier: string }
-  | { name: "draft_done"; chars: number }
-  | { name: "compile_start" }
-  | { name: "compile_done"; page_count: number }
-  | { name: "repair_start"; iteration: number; tier: string; page_count: number }
-  | { name: "repair_compile_done"; iteration: number; page_count: number };
-
-export interface TailorCallbacks {
-  onPhase?: (phase: TailorPhase) => void;
-  onResult?: (result: TailorResponse) => void;
-  onError?: (data: { message: string; error?: string; page_count?: number; iterations?: number }) => void;
-}
+export type TailorEnqueueResponse = { job_id: string; batch_id: string | null };
 
 export async function tailorToJd(
   masterId: number,
   body: TailorRequest,
-  cb: TailorCallbacks = {},
-  signal?: AbortSignal,
-): Promise<void> {
+): Promise<TailorEnqueueResponse> {
   const res = await fetch(`${BASE}/resumes/${masterId}/tailor`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal,
   });
-  if (!res.ok || !res.body) {
-    let payload: any;
-    try { payload = await res.json(); } catch { payload = { message: `HTTP ${res.status}` }; }
-    cb.onError?.({ message: payload?.detail?.message || payload?.message || `HTTP ${res.status}`, ...(payload?.detail || {}) });
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const raw = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const event = parseSseEvent(raw);
-      if (!event) continue;
-      if (event.event === "phase") cb.onPhase?.(JSON.parse(event.data));
-      else if (event.event === "result") cb.onResult?.(JSON.parse(event.data));
-      else if (event.event === "error") cb.onError?.(JSON.parse(event.data));
-    }
-  }
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
 }
 
 export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
@@ -342,6 +303,76 @@ export async function rollback(id: number, versionId: number): Promise<ResumeOut
   return res.json();
 }
 
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface Job {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  batch_id: string | null;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  attempts: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface TailorItem {
+  jd_text: string;
+  title: string;
+  company: string;
+  url?: string;
+}
+
+export async function enqueueTailorBatch(body: {
+  resume_id: number;
+  items: TailorItem[];
+  deep?: boolean;
+}): Promise<{ batch_id: string; job_ids: string[] }> {
+  const res = await fetch(`${BASE}/jobs/tailor`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function listJobs(params?: {
+  status?: string;
+  batch_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: Job[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.batch_id) qs.set("batch_id", params.batch_id);
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const res = await fetch(`${BASE}/jobs${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function getJob(id: string): Promise<Job> {
+  const res = await fetch(`${BASE}/jobs/${id}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function cancelJob(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/jobs/${id}/cancel`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
@@ -381,6 +412,8 @@ export const api = {
   streamEdit,
   acceptEdit,
   tailorToJd,
+  getJob,
+  cancelJob,
   listGroupedResumes,
   getSections,
   putSections,
