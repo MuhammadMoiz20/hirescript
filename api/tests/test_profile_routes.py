@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
-from app.db import SessionLocal, engine
+from app.db import SessionLocal
 from app.main import app
 from app.models import Profile as ProfileModel
 
@@ -17,7 +17,6 @@ def _clean_profile():
         async with SessionLocal() as s:
             await s.execute(delete(ProfileModel))
             await s.commit()
-        await engine.dispose()
 
     asyncio.run(_run())
     yield
@@ -63,3 +62,14 @@ def test_put_profile_rejects_invalid():
     client_authed = _client_authed()
     r = client_authed.put("/profile", json={"legal_name": "x", "email": "not-an-email"})
     assert r.status_code == 422
+
+
+def test_put_profile_can_be_called_twice():
+    client_authed = _client_authed()
+    payload1 = {"legal_name": "Moiz", "email": "m@x.com"}
+    payload2 = {"legal_name": "Moiz Z", "email": "m2@x.com"}
+    assert client_authed.put("/profile", json=payload1).status_code == 200
+    assert client_authed.put("/profile", json=payload2).status_code == 200
+    body = client_authed.get("/profile").json()
+    assert body["legal_name"] == "Moiz Z"
+    assert body["email"] == "m2@x.com"
