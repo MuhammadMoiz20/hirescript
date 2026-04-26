@@ -301,3 +301,68 @@ def test_events_stream_requires_auth():
 
     r = client.get(f"/api/jobs/{_uuid.uuid4()}/events")
     assert r.status_code == 401
+
+
+def _seed_job(status: str):
+    """Insert a single Job with the given status. Returns job_id."""
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Job
+
+    async def _run():
+        async with SessionLocal() as s:
+            j = Job(kind="tailor", status=status, payload={})
+            s.add(j)
+            await s.commit()
+            await s.refresh(j)
+            return j.id
+
+    return asyncio.run(_run())
+
+
+def _get_job_status(job_id):
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Job
+    from sqlalchemy import select
+
+    async def _run():
+        async with SessionLocal() as s:
+            j = (
+                await s.execute(select(Job).where(Job.id == job_id))
+            ).scalar_one()
+            return j.status
+
+    return asyncio.run(_run())
+
+
+def test_cancel_queued_job():
+    cookies = _login()
+    job_id = _seed_job("queued")
+    r = client.post(f"/api/jobs/{job_id}/cancel", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+    assert _get_job_status(job_id) == "cancelled"
+
+
+def test_cancel_running_job():
+    cookies = _login()
+    job_id = _seed_job("running")
+    r = client.post(f"/api/jobs/{job_id}/cancel", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert _get_job_status(job_id) == "cancelled"
+
+
+def test_cancel_terminal_job_returns_409():
+    cookies = _login()
+    for status in ("succeeded", "failed", "cancelled"):
+        job_id = _seed_job(status)
+        r = client.post(f"/api/jobs/{job_id}/cancel", cookies=cookies)
+        assert r.status_code == 409, f"{status}: {r.text}"
+
+
+def test_cancel_requires_auth():
+    import uuid as _uuid
+
+    r = client.post(f"/api/jobs/{_uuid.uuid4()}/cancel")
+    assert r.status_code == 401

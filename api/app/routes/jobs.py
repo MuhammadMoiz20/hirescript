@@ -16,6 +16,7 @@ from app.schemas import (
     JobListOut,
     JobOut,
 )
+from app.services.jobs_repo import cancel_job
 
 _TERMINAL_PHASES = ("done", "failed", "cancelled")
 _POLL_INTERVAL_SECONDS = 0.5
@@ -128,6 +129,23 @@ async def stream_job_events(
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/{job_id}/cancel")
+async def cancel(
+    job_id: uuid.UUID,
+    user_id: int = Depends(require_user),
+):
+    """Mark a queued/running job as cancelled.
+
+    The runner observes the status flip between phases and stops; we don't
+    interrupt an in-flight Anthropic call. Returns 409 if the job is in a
+    terminal state (succeeded/failed/already cancelled).
+    """
+    ok = await cancel_job(SessionLocal, job_id)
+    if not ok:
+        raise HTTPException(409, "not cancellable")
+    return {"ok": True}
 
 
 @router.get("/{job_id}", response_model=JobOut)
