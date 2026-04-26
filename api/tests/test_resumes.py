@@ -51,7 +51,7 @@ def test_grouped_includes_variant_with_jd_info():
     from app.services.tailor import TailorResult
     cookies = _login()
     master = client.post("/resumes", json={"name": "WithJD", "template_id": "jakes"}, cookies=cookies).json()
-    with patch("app.routes.resumes.tailor_resume", new=AsyncMock(return_value=TailorResult(
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
         variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
         pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
         tier_history=[], keywords_used=["python"],

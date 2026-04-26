@@ -60,7 +60,7 @@ def _create_master():
 def test_tailor_creates_variant_when_enforced():
     cookies, mid = _create_master()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(
@@ -83,7 +83,7 @@ def test_tailor_rejects_when_not_enforced():
     cookies, mid = _create_master()
     bad = _ok_result(enforced=False, page_count=2)
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=bad),
     ):
         r = client.post(
@@ -102,7 +102,7 @@ def test_tailor_rejects_when_not_enforced():
 def test_tailor_404_on_missing_master():
     cookies = _login()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(
@@ -116,7 +116,7 @@ def test_tailor_404_on_missing_master():
 def test_tailor_400_when_target_is_variant():
     cookies, mid = _create_master()
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         first_resp = client.post(
@@ -128,7 +128,7 @@ def test_tailor_400_when_target_is_variant():
     first_result = next(d for n, d in first_events if n == "result")
     variant_id = first_result["variant"]["id"]
     with patch(
-        "app.routes.resumes.tailor_resume",
+        "app.services.jobs_runner.tailor_resume",
         new=AsyncMock(return_value=_ok_result()),
     ):
         r = client.post(

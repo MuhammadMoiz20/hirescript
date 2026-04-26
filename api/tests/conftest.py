@@ -116,6 +116,17 @@ async def seeded_master_resume(db_session):
 
 
 @pytest.fixture(autouse=True)
+def _jobs_inline(monkeypatch):
+    """Force the tailor route to run jobs synchronously in-process.
+
+    The route enqueues a ``Job`` and (when ``JOBS_INLINE=1``) runs the
+    ``run_tailor_job`` runner inline so the existing assert-on-JSON tests
+    keep working without standing up a worker container under pytest.
+    """
+    monkeypatch.setenv("JOBS_INLINE", "1")
+
+
+@pytest.fixture(autouse=True)
 def _clear_testclient_cookies():
     """Ensure module-level TestClient instances don't leak cookies across tests."""
     yield

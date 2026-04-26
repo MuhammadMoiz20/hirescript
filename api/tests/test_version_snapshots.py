@@ -109,7 +109,7 @@ async def test_tailor_creates_version_for_variant():
         keywords_used=["python"],
     )
     with patch(
-        "app.routes.resumes.tailor_resume", new=AsyncMock(return_value=fake)
+        "app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=fake)
     ):
         r = client.post(
             f"/resumes/{rid}/tailor",

@@ -48,6 +48,19 @@ SessionFactory = Callable[[], AsyncSession]
 HEARTBEAT_SEC = 10
 
 
+class _NotOnePageError(Exception):
+    """Raised when ``tailor_resume`` returns a non-enforced result.
+
+    Carries ``page_count`` + ``iterations`` so the route layer (or any
+    inline caller) can translate it into a structured 422 response.
+    """
+
+    def __init__(self, *, page_count: int, iterations: int) -> None:
+        super().__init__(f"not_one_page page_count={page_count}")
+        self.page_count = page_count
+        self.iterations = iterations
+
+
 async def _bump_heartbeat(sf: SessionFactory, job_id: uuid.UUID) -> None:
     async with sf() as s:
         await s.execute(
@@ -122,6 +135,14 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             deep_tailor=bool(payload.get("deep")),
             on_progress=on_progress,
         )
+
+        # If the enforcer couldn't get the tailored variant down to one page
+        # we refuse to persist it — surface this as a structured failure so
+        # the API can translate it to a 422 ``not_one_page`` response.
+        if not result.enforced:
+            raise _NotOnePageError(
+                page_count=result.page_count, iterations=result.iterations
+            )
 
         # 2. Persist JD + variant + version snapshot, mirror tailor route.
         async with sf() as s:
@@ -202,6 +223,39 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
         except Exception:  # noqa: BLE001
             logger.exception(
                 "terminal cancel handler failed for job %s", job_id
+            )
+
+    except _NotOnePageError as exc:
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "error": "not_one_page",
+                            "page_count": exc.page_count,
+                            "iterations": exc.iterations,
+                        },
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message="not_one_page",
+                data={
+                    "error": "not_one_page",
+                    "page_count": exc.page_count,
+                    "iterations": exc.iterations,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
             )
 
     except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
