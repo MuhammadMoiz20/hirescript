@@ -38,6 +38,10 @@ async def ingest_document(
     meta = meta or {}
     digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
+    # TODO(slice-2): wrap in try/except IntegrityError to retry on the
+    # `(user_id, source, source_id)` unique-constraint race when concurrent
+    # worker tasks ingest the same document. Currently safe because slice-1
+    # only invokes this from request handlers (one in-flight per user).
     existing = (
         await db.execute(
             select(KbDocument).where(
@@ -84,7 +88,7 @@ async def ingest_document(
                     text=c["text"],
                     token_count=c["token_count"],
                     embedding=vec,
-                    meta={"heading": c["meta"].get("heading")},
+                    meta=dict(c["meta"]),
                 )
             )
 

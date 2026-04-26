@@ -30,6 +30,9 @@ async def ingest(
     """Sync the markdown folder at ``root`` into the KB.
 
     Returns ``{"created_or_updated": N, "deleted": M}``.
+
+    Commits per file (via ingest_document) and a final commit for stale-doc
+    deletions. A failure mid-loop leaves earlier files durably committed.
     """
     root_path = Path(root)
     if not root_path.exists() or not root_path.is_dir():
@@ -39,6 +42,12 @@ async def ingest(
     created_or_updated = 0
     for md in sorted(root_path.rglob("*.md")):
         if not md.is_file():
+            continue
+        try:
+            resolved = md.resolve()
+            if not resolved.is_relative_to(root_path.resolve()):
+                continue
+        except (OSError, ValueError):
             continue
         rel = md.relative_to(root_path).as_posix()
         seen.add(rel)
