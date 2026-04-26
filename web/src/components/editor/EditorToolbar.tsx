@@ -6,8 +6,10 @@ interface Props {
   onBack: () => void;
   onSave: () => void;
   onCompile: () => void;
+  onDownload?: () => void;
   saving?: boolean;
   compiling?: boolean;
+  downloading?: boolean;
   pageCount?: number | null;
   autosaveLabel?: string;
   onOpenChat?: () => void;
@@ -18,8 +20,10 @@ export default function EditorToolbar({
   onBack,
   onSave,
   onCompile,
+  onDownload,
   saving = false,
   compiling = false,
+  downloading = false,
   pageCount,
   autosaveLabel,
   onOpenChat,
@@ -73,6 +77,18 @@ export default function EditorToolbar({
       <Button size="sm" variant="primary" icon="compile" onClick={onCompile} disabled={compiling}>
         {compiling ? "Compiling…" : "Compile"}
       </Button>
+      {onDownload && (
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="download"
+          onClick={onDownload}
+          disabled={downloading}
+          aria-label="Download PDF"
+        >
+          {downloading ? "Preparing…" : "Download"}
+        </Button>
+      )}
     </div>
   );
 }

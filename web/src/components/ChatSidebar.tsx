@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, EditResult, Tier } from "../api";
+import { api, ChatTurn, EditResult, Tier } from "../api";
 import Glyph from "./ui/Glyph";
 import Button from "./ui/Button";
 import ModelBadge, { ModelName } from "./ui/ModelBadge";
@@ -39,6 +39,12 @@ interface Props {
   resumeId: number;
   onProposed: (result: EditResult) => void;
   defaultTier?: Tier;
+  /**
+   * Returns the latex currently in the editor at send time. Used so chat
+   * edits operate on unsaved changes, not on the last persisted version.
+   * Optional — when omitted, the backend falls back to the DB value.
+   */
+  getCurrentLatex?: () => string;
 }
 
 const TIER_TO_MODEL: Record<Tier, ModelName> = {
@@ -47,7 +53,12 @@ const TIER_TO_MODEL: Record<Tier, ModelName> = {
   opus: "opus",
 };
 
-export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku" }: Props) {
+export default function ChatSidebar({
+  resumeId,
+  onProposed,
+  defaultTier = "haiku",
+  getCurrentLatex,
+}: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [tier, setTier] = useState<Tier>(defaultTier);
@@ -74,9 +85,30 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
     });
   };
 
+  /**
+   * Build the chat history payload from prior turns. We send only prose (the
+   * user-visible portion of assistant replies), never the raw JSON envelope,
+   * so the model gets clean conversational context. Skip in-flight or errored
+   * turns.
+   */
+  const buildHistory = (): ChatTurn[] => {
+    const turns: ChatTurn[] = [];
+    for (const m of messages) {
+      if (m.role === "user") {
+        turns.push({ role: "user", content: m.text });
+      } else if (m.status === "done") {
+        const visible = visiblePart(m.text).trim();
+        if (visible) turns.push({ role: "assistant", content: visible });
+      }
+    }
+    return turns;
+  };
+
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed || streaming) return;
+    const history = buildHistory();
+    const currentLatex = getCurrentLatex?.();
     setStreaming(true);
     setMessages((prev) => [
       ...prev,
@@ -86,24 +118,31 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
     setInput("");
 
     try {
-      await api.streamEdit(resumeId, trimmed, tier, {
-        onChunk: (text: string) => {
-          updateLastAssistant((msg) => ({ ...msg, text: msg.text + text }));
+      await api.streamEdit(
+        resumeId,
+        trimmed,
+        tier,
+        {
+          onChunk: (text: string) => {
+            updateLastAssistant((msg) => ({ ...msg, text: msg.text + text }));
+          },
+          onResult: (result: EditResult) => {
+            updateLastAssistant((msg) => ({ ...msg, status: "done", result }));
+            onProposed(result);
+            setStreaming(false);
+          },
+          onError: (errMsg: string) => {
+            updateLastAssistant((msg) => ({
+              ...msg,
+              status: "error",
+              text: msg.text + (msg.text ? "\n" : "") + errMsg,
+            }));
+            setStreaming(false);
+          },
         },
-        onResult: (result: EditResult) => {
-          updateLastAssistant((msg) => ({ ...msg, status: "done", result }));
-          onProposed(result);
-          setStreaming(false);
-        },
-        onError: (errMsg: string) => {
-          updateLastAssistant((msg) => ({
-            ...msg,
-            status: "error",
-            text: msg.text + (msg.text ? "\n" : "") + errMsg,
-          }));
-          setStreaming(false);
-        },
-      });
+        undefined,
+        { history, currentLatex },
+      );
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       updateLastAssistant((msg) => ({
@@ -113,6 +152,12 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
       }));
       setStreaming(false);
     }
+  };
+
+  const handleClear = () => {
+    if (streaming) return;
+    setMessages([]);
+    setInput("");
   };
 
   return (
@@ -139,6 +184,26 @@ export default function ChatSidebar({ resumeId, onProposed, defaultTier = "haiku
         <span style={{ fontWeight: 600, fontSize: 13 }}>Claude</span>
         <ModelBadge model={TIER_TO_MODEL[tier]} size="sm" />
         <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={handleClear}
+          disabled={streaming || messages.length === 0}
+          aria-label="Clear chat"
+          title="Clear chat and start fresh"
+          className="mono"
+          style={{
+            fontSize: 11,
+            background: "var(--paper-2)",
+            border: "1px solid var(--rule)",
+            color: "var(--ink-2)",
+            borderRadius: 2,
+            padding: "2px 6px",
+            cursor: streaming || messages.length === 0 ? "not-allowed" : "pointer",
+            opacity: streaming || messages.length === 0 ? 0.5 : 1,
+          }}
+        >
+          Clear
+        </button>
         <select
           value={tier}
           onChange={(e) => setTier(e.target.value as Tier)}

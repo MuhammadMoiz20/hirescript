@@ -17,6 +17,7 @@ import MobileTabBar, { MobileTab } from "../components/editor/MobileTabBar";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "../components/ThemeProvider";
 import { useBreakpoint } from "../hooks/useBreakpoint";
+import { downloadFilename } from "../util/downloadFilename";
 
 export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [resumeName, setResumeName] = useState<string>("");
@@ -31,7 +32,9 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [sectionsPayload, setSectionsPayload] = useState<SectionsPayload | null>(null);
   const [sectionsLoading, setSectionsLoading] = useState(false);
   const [pageCount, setPageCount] = useState<number>(1);
+  const [overflowCount, setOverflowCount] = useState<number>(0);
   const [tightening, setTightening] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [formContent, setFormContent] = useState<any>(null);
   const { theme } = useTheme();
   const cmTheme = theme === "dark" ? githubDark : githubLight;
@@ -49,6 +52,19 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         setSectionsPayload(payload);
       } catch {
         setView("latex");
+      }
+      // Auto-compile on open so the preview is ready without a manual click.
+      setCompiling(true);
+      try {
+        const { pdf: blob, pageCount: pc, overflowCount: oc } = await api.compileResume(id);
+        setPdf(blob);
+        setPageCount(pc);
+        setOverflowCount(oc);
+      } catch (e: any) {
+        const detail = e?.detail ?? e;
+        setError(detail?.log || detail?.message || String(e));
+      } finally {
+        setCompiling(false);
       }
     })();
   }, [id]);
@@ -94,9 +110,10 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     setCompiling(true);
     try {
       await save();
-      const { pdf: blob, pageCount: pc } = await api.compileResume(id);
+      const { pdf: blob, pageCount: pc, overflowCount: oc } = await api.compileResume(id);
       setPdf(blob);
       setPageCount(pc);
+      setOverflowCount(oc);
     } catch (e: any) {
       // save() already surfaced the error; only set if not already set.
       if (!error) setError(e?.detail?.log || String(e));
@@ -148,22 +165,63 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
     setProposed(null);
   }
 
+  async function download() {
+    if (downloading) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      // Compile fresh so the downloaded PDF reflects the current saved state
+      // (compile() also persists). If we already have a recent blob, reuse it
+      // to avoid an unnecessary round-trip.
+      let blob = pdf;
+      if (!blob) {
+        await save();
+        const compiled = await api.compileResume(id);
+        blob = compiled.pdf;
+        setPdf(blob);
+        setPageCount(compiled.pageCount);
+        setOverflowCount(compiled.overflowCount);
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadFilename(resumeName);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      const detail = e?.detail ?? e;
+      setError(detail?.log || detail?.message || String(e));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   async function tighten() {
     if (tightening) return;
     setTightening(true);
+    setError(null);
     try {
-      await api.streamEdit(
-        id,
-        "Tighten this resume so it fits on exactly one page. Do not drop protected terms.",
-        "haiku",
-        {
-          onResult: (result) => {
-            if (result.proposed_latex) setProposed(result);
-            else setError("Claude didn't propose an edit. Try a more specific instruction.");
-          },
-          onError: (msg) => setError(msg),
-        },
-      );
+      // Persist current latex first so the enforcer operates on the same
+      // source the user sees in the editor.
+      try { await api.updateResume(id, latex); } catch { /* surface via repair if it fails */ }
+      const result = await api.repairResume(id);
+      setProposed({
+        proposed_latex: result.latex_source,
+        page_count: result.page_count,
+        enforced: result.enforced,
+        iterations: result.iterations,
+        tier_history: result.tier_history,
+        removed_terms: [],
+        kind: "edit",
+      });
+      if (!result.enforced && result.overflow_count === 0 && result.page_count > 1) {
+        setError(`Couldn't reach 1 page after ${result.iterations} attempts.`);
+      }
+    } catch (e: any) {
+      const detail = e?.detail ?? e;
+      setError(detail?.log || detail?.message || String(e));
     } finally {
       setTightening(false);
     }
@@ -231,7 +289,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   if (bp === "mobile") {
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-        <TopChrome>
+        <TopChrome onLogoClick={onBack}>
           <span>Library</span>
           <span style={{ color: "var(--rule-strong)" }}>/</span>
           <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
@@ -241,11 +299,13 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           onBack={onBack}
           onSave={save}
           onCompile={compile}
+          onDownload={download}
           saving={saving}
           compiling={compiling}
+          downloading={downloading}
           pageCount={pageCount}
         />
-        <OverflowBanner pageCount={pageCount} onTighten={tighten} busy={tightening} />
+        <OverflowBanner pageCount={pageCount} overflowCount={overflowCount} onTighten={tighten} busy={tightening} />
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           {mobileTab === "edit" && (
             <>
@@ -301,6 +361,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           {mobileTab === "chat" && (
             <ChatSidebar
               resumeId={id}
+              getCurrentLatex={() => latex}
               onProposed={(r) => {
                 if (r.proposed_latex) setProposed(r);
               }}
@@ -327,7 +388,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome>
+      <TopChrome onLogoClick={onBack}>
         <span>Library</span>
         <span style={{ color: "var(--rule-strong)" }}>/</span>
         <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
@@ -337,9 +398,12 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         style={{
           flex: 1,
           display: "grid",
+          // Slightly bias the preview wider than the editor so a US-letter page
+          // fits at ~100% zoom without scrolling, and trim the chat rail so the
+          // editor still has breathing room on 13-14" screens.
           gridTemplateColumns: isDesktop
-            ? "48px minmax(0, 1fr) minmax(0, 1fr) 360px"
-            : "48px minmax(0, 1fr) minmax(0, 1fr)",
+            ? "48px minmax(360px, 0.9fr) minmax(560px, 1.15fr) 320px"
+            : "48px minmax(320px, 0.95fr) minmax(440px, 1.05fr)",
           gridTemplateRows: "minmax(0, 1fr)",
           minHeight: 0,
         }}
@@ -361,12 +425,14 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
             onBack={onBack}
             onSave={save}
             onCompile={compile}
+            onDownload={download}
             saving={saving}
             compiling={compiling}
+            downloading={downloading}
             pageCount={pageCount}
             onOpenChat={!isDesktop ? () => setChatOpen(true) : undefined}
           />
-          <OverflowBanner pageCount={pageCount} onTighten={tighten} busy={tightening} />
+          <OverflowBanner pageCount={pageCount} overflowCount={overflowCount} onTighten={tighten} busy={tightening} />
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             {centerView}
           </div>
@@ -390,6 +456,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
           <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <ChatSidebar
               resumeId={id}
+              getCurrentLatex={() => latex}
               onProposed={(result) => {
                 if (result.proposed_latex) setProposed(result);
               }}
@@ -402,6 +469,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
           <ChatSidebar
             resumeId={id}
+            getCurrentLatex={() => latex}
             onProposed={(r) => {
               if (r.proposed_latex) setProposed(r);
               setChatOpen(false);

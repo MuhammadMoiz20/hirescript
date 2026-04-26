@@ -5,6 +5,7 @@ import { useTheme } from "../ThemeProvider";
 interface Props {
   children?: ReactNode;
   right?: ReactNode;
+  onLogoClick?: () => void;
 }
 
 function Wordmark() {
@@ -21,7 +22,7 @@ function Wordmark() {
   );
 }
 
-export default function TopChrome({ children, right }: Props) {
+export default function TopChrome({ children, right, onLogoClick }: Props) {
   const { theme, toggle } = useTheme();
   return (
     <header
@@ -41,7 +42,20 @@ export default function TopChrome({ children, right }: Props) {
         display: "flex", alignItems: "center", gap: 7,
         paddingRight: 10, borderRight: "1px solid var(--rule)", height: "100%",
       }}>
-        <Wordmark />
+        {onLogoClick ? (
+          <button
+            onClick={onLogoClick}
+            aria-label="Go to dashboard"
+            style={{
+              background: "transparent", border: "none", padding: 0, cursor: "pointer",
+              color: "inherit", display: "inline-flex", alignItems: "center",
+            }}
+          >
+            <Wordmark />
+          </button>
+        ) : (
+          <Wordmark />
+        )}
       </span>
       {children && (
         <span className="mono" style={{

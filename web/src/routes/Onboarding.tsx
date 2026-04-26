@@ -102,6 +102,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorLog, setErrorLog] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const bp = useBreakpoint();
 
@@ -110,6 +111,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
     if (busy || !mode || !name.trim()) return;
     setBusy(true);
     setError(null);
+    setErrorLog(null);
     setWarn(null);
     try {
       let result: ResumeOut | OnboardedResume;
@@ -138,8 +140,14 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
       onCreated(result);
     } catch (err: any) {
       const detail = err?.detail;
-      if (detail?.error === "not_a_pdf") setError("That doesn't look like a PDF.");
-      else setError(err?.message || "Failed");
+      if (detail?.error === "not_a_pdf") {
+        setError("That doesn't look like a PDF.");
+      } else if (detail?.error === "compile_failed") {
+        setError("LaTeX failed to compile. See log below.");
+        setErrorLog(typeof detail.log === "string" ? detail.log : null);
+      } else {
+        setError(err?.message || "Failed");
+      }
     } finally {
       setBusy(false);
     }
@@ -147,7 +155,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome>
+      <TopChrome onLogoClick={onCancel}>
         <button
           type="button"
           onClick={onCancel}
@@ -278,6 +286,25 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
                   <p role="alert" style={{ color: "var(--err, crimson)", fontSize: 13, margin: 0 }}>
                     {error}
                   </p>
+                )}
+                {errorLog && (
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 11.5,
+                      background: "var(--paper-2)",
+                      border: "1px solid var(--rule)",
+                      borderRadius: 3,
+                      padding: 10,
+                      margin: 0,
+                      maxHeight: 220,
+                      overflow: "auto",
+                      color: "var(--ink-2)",
+                    }}
+                  >
+                    {errorLog}
+                  </pre>
                 )}
                 {warn && (
                   <p role="status" style={{ color: "var(--warn, #a60)", fontSize: 13, margin: 0 }}>
