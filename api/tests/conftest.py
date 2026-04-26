@@ -89,6 +89,32 @@ async def db_session(sessionmaker_factory):
         yield s
 
 
+@pytest.fixture
+async def seeded_master_resume(db_session):
+    """Insert ``User(id=1)`` + a master ``Resume``. Returns the persisted Resume."""
+    from sqlalchemy import select
+    from app.models import Resume, User
+
+    existing = (
+        await db_session.execute(select(User).where(User.id == 1))
+    ).scalar_one_or_none()
+    if existing is None:
+        db_session.add(User(id=1))
+        await db_session.flush()
+    resume = Resume(
+        user_id=1,
+        kind="master",
+        name="Master",
+        template_id="jakes",
+        latex_source="\\documentclass{article}\\begin{document}x\\end{document}",
+        protected_terms=[],
+    )
+    db_session.add(resume)
+    await db_session.commit()
+    await db_session.refresh(resume)
+    return resume
+
+
 @pytest.fixture(autouse=True)
 def _clear_testclient_cookies():
     """Ensure module-level TestClient instances don't leak cookies across tests."""
