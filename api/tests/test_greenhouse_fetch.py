@@ -155,7 +155,10 @@ async def test_upsert_creates_new_postings(db_session):
         source="greenhouse",
         postings=[_posting("1"), _posting("2"), _posting("3")],
     )
-    assert counts == {"created": 3, "updated": 0, "unchanged": 0}
+    assert counts["created"] == 3
+    assert counts["updated"] == 0
+    assert counts["unchanged"] == 0
+    assert len(counts["created_ids"]) == 3
 
     rows = (await db_session.execute(select(JobPosting))).scalars().all()
     assert len(rows) == 3
@@ -187,7 +190,10 @@ async def test_upsert_unchanged_returns_zero_writes(db_session):
         source="greenhouse",
         postings=[p],
     )
-    assert counts == {"created": 0, "updated": 0, "unchanged": 1}
+    assert counts["created"] == 0
+    assert counts["updated"] == 0
+    assert counts["unchanged"] == 1
+    assert len(counts["unchanged_ids"]) == 1
 
 
 @pytest.mark.asyncio
@@ -213,7 +219,10 @@ async def test_upsert_updates_changed_postings(db_session):
         source="greenhouse",
         postings=[_posting("99", title="New", description_text="new desc")],
     )
-    assert counts == {"created": 0, "updated": 1, "unchanged": 0}
+    assert counts["created"] == 0
+    assert counts["updated"] == 1
+    assert counts["unchanged"] == 0
+    assert len(counts["updated_ids"]) == 1
 
     row = (
         await db_session.execute(

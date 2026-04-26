@@ -41,7 +41,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
 from app.models import Company, Job, JobDescription, Resume
-from app.services.jobs_repo import emit_event
+from app.services.classify import classify_posting
+from app.services.jobs_repo import emit_event, enqueue_classify_posting
 from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
@@ -348,6 +349,23 @@ async def run_ingest_greenhouse_job(
                 postings=postings,
             )
 
+        # Enqueue a classify job per newly-created posting. We do this in a
+        # fresh session so the upsert_postings commit is durable before we
+        # add follow-up rows. Counts are JSON-serializable.
+        created_ids = list(counts.get("created_ids") or [])
+        if created_ids:
+            async with sf() as s:
+                for pid in created_ids:
+                    await enqueue_classify_posting(s, posting_id=pid)
+                await s.commit()
+
+        # Strip the *_ids lists from the event payload so SSE consumers stay
+        # lean; the counts scalars are sufficient for UI feedback.
+        event_data = {
+            "created": counts["created"],
+            "updated": counts["updated"],
+            "unchanged": counts["unchanged"],
+        }
         await emit_event(
             sf,
             job_id,
@@ -357,7 +375,7 @@ async def run_ingest_greenhouse_job(
                 f"updated={counts['updated']} "
                 f"unchanged={counts['unchanged']}"
             ),
-            data=counts,
+            data=event_data,
         )
 
         async with sf() as s:
@@ -367,14 +385,101 @@ async def run_ingest_greenhouse_job(
                 .values(
                     status="succeeded",
                     finished_at=datetime.now(timezone.utc),
-                    result={"slug": slug, **counts},
+                    result={"slug": slug, **event_data},
                 )
             )
             await s.commit()
 
         try:
             await emit_event(
-                sf, job_id, phase="done", message=None, data=counts
+                sf, job_id, phase="done", message=None, data=event_data
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
+
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": str(exc)[:500]},
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message=str(exc)[:500],
+                data={"error": str(exc)[:500]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
+
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
+async def run_classify_posting_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``classify_posting`` job.
+
+    Reads ``payload['posting_id']`` and runs :func:`classify_posting`,
+    emitting ``classify_start`` / ``classify_done`` / ``done`` events
+    (or a terminal ``failed`` event on any exception).
+    """
+    hb = asyncio.create_task(_heartbeat(sf, job_id))
+    try:
+        async with sf() as s:
+            job = (
+                await s.execute(select(Job).where(Job.id == job_id))
+            ).scalar_one()
+            payload: dict[str, Any] = job.payload or {}
+            posting_id = int(payload["posting_id"])
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="classify_start",
+            message=None,
+            data={"posting_id": posting_id},
+        )
+
+        async with sf() as s:
+            result = await classify_posting(s, posting_id=posting_id)
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="classify_done",
+            message=None,
+            data=result,
+        )
+
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"posting_id": posting_id, **result},
+                )
+            )
+            await s.commit()
+
+        try:
+            await emit_event(
+                sf, job_id, phase="done", message=None, data=result
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
@@ -419,4 +524,5 @@ async def run_ingest_greenhouse_job(
 RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "tailor": run_tailor_job,
     "ingest_greenhouse": run_ingest_greenhouse_job,
+    "classify_posting": run_classify_posting_job,
 }

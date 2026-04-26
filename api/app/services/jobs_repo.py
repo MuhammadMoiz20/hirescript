@@ -153,6 +153,26 @@ async def enqueue_ingest_greenhouse(
     return job_id
 
 
+async def enqueue_classify_posting(
+    db: AsyncSession, *, posting_id: int
+) -> uuid.UUID:
+    """Insert a queued ``classify_posting`` job for ``posting_id``.
+
+    Caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="classify_posting",
+            status="queued",
+            payload={"posting_id": posting_id},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:
     """Mark a queued or running job as cancelled. Returns True if a row changed."""
     async with sf() as s:
