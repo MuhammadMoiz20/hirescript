@@ -37,6 +37,7 @@ services:
     volumes:
       - ./api:/app
       - pdfs:/app/compiled_pdfs
+      - ./kb:/app/kb
       - ${HOME}/.claude:/root/.claude
     depends_on:
       db:

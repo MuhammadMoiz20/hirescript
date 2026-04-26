@@ -24,3 +24,7 @@ api/compiled_pdfs/
 # Debug artifacts
 /*.png
 .playwright-mcp/
+
+# Manual KB markdown — track the directory but not its contents
+kb/*.md
+!kb/.gitkeep
