@@ -17,3 +17,18 @@ class JobPostingOut(BaseModel):
     ingested_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class JobPostingDetailOut(JobPostingOut):
+    """Inbox-detail-drawer view: full description + classification context."""
+
+    description_text: str
+    description_html: str | None = None
+    meta: dict = {}
+    canonical_key: str | None = None
+    classification_rationale: str | None = None
+
+
+class PostingListOut(BaseModel):
+    items: list[JobPostingOut]
+    total: int

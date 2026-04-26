@@ -18,3 +18,17 @@ class ApplicationOut(BaseModel):
     error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ApplicationDetailOut(ApplicationOut):
+    """Review-queue detail view: adds resume PDF link + prepared timestamp."""
+
+    resume_variant_id: int | None = None
+    resume_pdf_url: str | None = None
+    canonical_key: str
+    prepared_at: datetime
+
+
+class ApplicationListOut(BaseModel):
+    items: list[ApplicationOut]
+    total: int
