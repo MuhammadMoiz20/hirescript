@@ -289,6 +289,10 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
 
 # Dispatch table mapping job ``kind`` -> async runner. New runners (slice 2+)
 # register themselves here so the worker supervisor stays kind-agnostic.
+# NOTE: tests must use monkeypatch.setitem(RUNNERS, kind, fake), not
+# monkeypatch.setattr on the module-level callable — the dict captures
+# the function reference at import time, so patching the bound name
+# does not update what gets dispatched.
 RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "tailor": run_tailor_job,
 }

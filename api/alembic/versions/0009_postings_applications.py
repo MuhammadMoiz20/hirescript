@@ -53,7 +53,7 @@ def upgrade() -> None:
         sa.Column(
             "company_id",
             sa.Integer(),
-            sa.ForeignKey("companies.id"),
+            sa.ForeignKey("companies.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("title", sa.Text(), nullable=False),
@@ -108,7 +108,7 @@ def upgrade() -> None:
         sa.Column(
             "posting_id",
             sa.Integer(),
-            sa.ForeignKey("job_postings.id"),
+            sa.ForeignKey("job_postings.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -121,7 +121,7 @@ def upgrade() -> None:
         sa.Column(
             "resume_variant_id",
             sa.Integer(),
-            sa.ForeignKey("resumes.id"),
+            sa.ForeignKey("resumes.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("cover_letter_text", sa.Text(), nullable=True),

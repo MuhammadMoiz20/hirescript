@@ -209,7 +209,7 @@ class JobPosting(Base):
     source: Mapped[str] = mapped_column(Text, nullable=False)
     source_job_id: Mapped[str] = mapped_column(Text, nullable=False)
     company_id: Mapped[int | None] = mapped_column(
-        ForeignKey("companies.id"), nullable=True
+        ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -256,14 +256,14 @@ class Application(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     posting_id: Mapped[int] = mapped_column(
-        ForeignKey("job_postings.id"), nullable=False
+        ForeignKey("job_postings.id", ondelete="CASCADE"), nullable=False
     )
     mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="B", default="B"
     )
     status: Mapped[str] = mapped_column(Text, nullable=False)
     resume_variant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("resumes.id"), nullable=True
+        ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True
     )
     cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     form_payload: Mapped[dict | None] = mapped_column(

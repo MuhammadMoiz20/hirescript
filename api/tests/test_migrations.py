@@ -48,3 +48,14 @@ async def test_applications_canonical_key_unique():
             "SELECT indexname FROM pg_indexes WHERE tablename='applications'"
         ))).all()
         assert any("canonical_key" in r[0] for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_applications_cascade_on_posting_delete():
+    async with engine.connect() as conn:
+        result = await conn.execute(text(
+            "SELECT confdeltype::text FROM pg_constraint "
+            "WHERE conname = 'applications_posting_id_fkey'"
+        ))
+        # 'c' = CASCADE, 'n' = SET NULL, 'a' = NO ACTION (default)
+        assert result.scalar() == "c"
