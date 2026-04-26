@@ -342,6 +342,76 @@ export async function rollback(id: number, versionId: number): Promise<ResumeOut
   return res.json();
 }
 
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface Job {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  batch_id: string | null;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  attempts: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface TailorItem {
+  jd_text: string;
+  title: string;
+  company: string;
+  url?: string;
+}
+
+export async function enqueueTailorBatch(body: {
+  resume_id: number;
+  items: TailorItem[];
+  deep?: boolean;
+}): Promise<{ batch_id: string; job_ids: string[] }> {
+  const res = await fetch(`${BASE}/jobs/tailor`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function listJobs(params?: {
+  status?: string;
+  batch_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ items: Job[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.batch_id) qs.set("batch_id", params.batch_id);
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const res = await fetch(`${BASE}/jobs${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function getJob(id: string): Promise<Job> {
+  const res = await fetch(`${BASE}/jobs/${id}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function cancelJob(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/jobs/${id}/cancel`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+}
+
 export const api = {
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
