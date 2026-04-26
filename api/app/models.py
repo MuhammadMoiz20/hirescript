@@ -2,6 +2,8 @@ import uuid
 from datetime import datetime
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    Index,
     Integer,
     JSON,
     String,
@@ -182,6 +184,135 @@ class Job(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Company(Base):
+    __tablename__ = "companies"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="greenhouse"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class JobPosting(Base):
+    __tablename__ = "job_postings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    source_job_id: Mapped[str] = mapped_column(Text, nullable=False)
+    company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("companies.id"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    apply_url: Mapped[str] = mapped_column(Text, nullable=False)
+    description_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description_text: Mapped[str] = mapped_column(Text, nullable=False)
+    meta: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    classification_rationale: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="new", default="new"
+    )
+    canonical_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    company: Mapped["Company | None"] = relationship()
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "source",
+            "source_job_id",
+            name="uq_job_postings_user_source_job",
+        ),
+        Index(
+            "ix_job_postings_user_status_ingested",
+            "user_id",
+            "status",
+            "ingested_at",
+        ),
+    )
+
+
+class Application(Base):
+    __tablename__ = "applications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    posting_id: Mapped[int] = mapped_column(
+        ForeignKey("job_postings.id"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="B", default="B"
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    resume_variant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resumes.id"), nullable=True
+    )
+    cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    form_payload: Mapped[dict | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    confirmation_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmation_screenshot_path: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prepared_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    posting: Mapped["JobPosting"] = relationship()
+    __table_args__ = (
+        Index(
+            "ix_applications_user_canonical_key",
+            "user_id",
+            "canonical_key",
+            unique=True,
+        ),
+        Index(
+            "ix_applications_user_status_prepared",
+            "user_id",
+            "status",
+            "prepared_at",
+        ),
+    )
+
+
+class AnswerCache(Base):
+    __tablename__ = "answer_cache"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    question_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "question_hash", name="uq_answer_cache_user_qhash"
+        ),
+    )
 
 
 class JobEvent(Base):
