@@ -31,6 +31,8 @@ services:
     build: ./api
     platform: linux/amd64
     env_file: .env
+    environment:
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
     ports: ["8000:8000"]
     volumes:
       - ./api:/app
