@@ -51,3 +51,13 @@ def test_application_out_instantiates_with_posting():
     assert app.posting.company == "Anthropic"
     assert app.mode == "B"
     assert app.form_payload == {"first_name": "Ada"}
+
+
+def test_jobposting_out_allows_company_none():
+    p = JobPostingOut(
+        id=2, source="greenhouse", source_job_id="xyz",
+        company=None, title="SWE", location="Remote",
+        apply_url="https://...", tier=None, fit_score=None,
+        status="new", ingested_at=datetime(2026, 4, 26),
+    )
+    assert p.company is None

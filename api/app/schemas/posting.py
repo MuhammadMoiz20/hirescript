@@ -7,7 +7,7 @@ class JobPostingOut(BaseModel):
     id: int
     source: str
     source_job_id: str
-    company: str  # display_name
+    company: str | None = None  # display_name
     title: str
     location: str | None = None
     apply_url: str
