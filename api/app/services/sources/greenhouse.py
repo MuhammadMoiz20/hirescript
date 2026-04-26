@@ -41,7 +41,15 @@ class NormalizedPosting(TypedDict):
 def _strip_html(html: str | None) -> str:
     if not html:
         return ""
-    return BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    soup = BeautifulSoup(html, "html.parser")
+    # Insert a newline after block-level tags so paragraphs stay separated.
+    for tag in soup.find_all(["p", "li", "br", "div", "h1", "h2", "h3", "h4", "tr"]):
+        tag.append("\n")
+    text = soup.get_text("", strip=False)
+    # Collapse runs of whitespace within a line; collapse runs of blank lines.
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    return "\n\n".join(lines)
 
 
 def _normalize_one(raw: dict[str, Any]) -> NormalizedPosting:
@@ -98,6 +106,12 @@ async def fetch_company_jobs(
     return [_normalize_one(j) for j in jobs if isinstance(j, dict)]
 
 
+# TODO(slice-2): the current SELECT-then-INSERT/UPDATE pattern is race-free under
+# the slice-2 single-writer assumption (one scheduler, one ingest job per slug
+# at a time). Once Task 13 adds manual sync routes that can race with the
+# cron, switch the INSERT branch to `INSERT … ON CONFLICT (user_id, source,
+# source_job_id) DO UPDATE` (Postgres-only) or wrap the SQLAlchemy add in
+# try/except IntegrityError + retry. Slice-2 routes will not race today.
 async def upsert_postings(
     db: AsyncSession,
     *,

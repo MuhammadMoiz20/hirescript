@@ -78,26 +78,31 @@ async def run_until_idle(
 
 
 async def _seed_companies(sf) -> None:
-    """Seed the ``companies`` table from :data:`GREENHOUSE_COMPANIES` once.
+    """Reconcile :data:`GREENHOUSE_COMPANIES` into the companies table on every boot.
 
-    Idempotent: a non-empty table is left alone, so re-runs (and tests
-    that pre-seed) are safe.
+    For each (slug, display) in the allowlist, INSERT if missing. Existing
+    rows are not modified — operator-disabled or display-name-edited rows
+    are preserved.
     """
     async with sf() as s:
-        existing = (await s.execute(select(Company))).first()
-        if existing:
-            return
+        existing_slugs = set(
+            (await s.execute(select(Company.slug))).scalars().all()
+        )
+        added = 0
         for slug, display in GREENHOUSE_COMPANIES:
-            s.add(
-                Company(
-                    slug=slug,
-                    display_name=display,
-                    source="greenhouse",
-                    enabled=True,
+            if slug not in existing_slugs:
+                s.add(
+                    Company(
+                        slug=slug,
+                        display_name=display,
+                        source="greenhouse",
+                        enabled=True,
+                    )
                 )
-            )
-        await s.commit()
-        log.info("seeded %d greenhouse companies", len(GREENHOUSE_COMPANIES))
+                added += 1
+        if added:
+            await s.commit()
+            log.info("seeded %d new companies", added)
 
 
 async def _enqueue_due_ingests(sf) -> None:

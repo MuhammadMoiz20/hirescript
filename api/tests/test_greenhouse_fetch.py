@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.models import Company, JobPosting, User
 from app.services.sources.greenhouse import (
     NormalizedPosting,
+    _strip_html,
     fetch_company_jobs,
     upsert_postings,
 )
@@ -58,6 +59,21 @@ def _make_client(
 
     transport = httpx.MockTransport(handler)
     return httpx.AsyncClient(transport=transport)
+
+
+def test_strip_html_preserves_paragraph_structure():
+    html = (
+        "<div><p>Build great things.</p><p>SF or remote.</p>"
+        "<ul><li>Python</li><li>Rust</li></ul></div>"
+    )
+    out = _strip_html(html)
+    # Expect paragraphs separated; bullets on their own lines.
+    assert "Build great things." in out
+    assert "SF or remote." in out
+    assert "Python" in out
+    assert "Rust" in out
+    # Crucially, structure should NOT be collapsed to a single line.
+    assert "\n" in out
 
 
 @pytest.mark.asyncio

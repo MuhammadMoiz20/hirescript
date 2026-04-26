@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy import select, update
 
@@ -127,6 +129,68 @@ async def test_scheduler_seeds_companies_on_first_boot(sessionmaker_factory):
     async with sessionmaker_factory() as s:
         rows = (await s.execute(select(Company))).scalars().all()
         assert len(rows) == len(GREENHOUSE_COMPANIES)
+
+
+@pytest.mark.asyncio
+async def test_seed_companies_adds_only_missing_slugs(sessionmaker_factory):
+    """Pre-seed a subset of allowlist slugs; reconcile must add the rest
+    while leaving pre-existing rows untouched (e.g. an operator-edited
+    display_name must not be overwritten)."""
+    from app.worker import _seed_companies
+
+    pre_seeded = list(GREENHOUSE_COMPANIES)[:2]
+    custom_display = "Operator Edited Display"
+
+    async with sessionmaker_factory() as s:
+        for slug, _display in pre_seeded:
+            s.add(
+                Company(
+                    slug=slug,
+                    display_name=custom_display,
+                    source="greenhouse",
+                    enabled=True,
+                )
+            )
+        await s.commit()
+
+    await _seed_companies(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        rows = (await s.execute(select(Company))).scalars().all()
+        slugs = {r.slug for r in rows}
+        assert slugs == {slug for slug, _ in GREENHOUSE_COMPANIES}
+        assert len(rows) == len(GREENHOUSE_COMPANIES)
+        # Pre-seeded rows preserved verbatim — display_name not overwritten.
+        by_slug = {r.slug: r for r in rows}
+        for slug, _display in pre_seeded:
+            assert by_slug[slug].display_name == custom_display
+
+
+@pytest.mark.asyncio
+async def test_scheduler_loops_and_shuts_down_cleanly(
+    monkeypatch, sessionmaker_factory
+):
+    """Drive ``_scheduler`` with a short interval; assert it ticks at least
+    twice and exits cleanly when the shutdown event is set."""
+    from app import worker
+
+    monkeypatch.setattr(worker, "INGEST_INTERVAL_SEC", 0.05)
+
+    tick_count = {"n": 0}
+
+    async def fake_enqueue(_sf):
+        tick_count["n"] += 1
+
+    monkeypatch.setattr(worker, "_enqueue_due_ingests", fake_enqueue)
+
+    shutdown = asyncio.Event()
+    task = asyncio.create_task(worker._scheduler(sessionmaker_factory, shutdown))
+
+    await asyncio.sleep(0.15)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert tick_count["n"] >= 2
 
 
 @pytest.mark.asyncio
