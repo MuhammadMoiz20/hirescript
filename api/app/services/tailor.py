@@ -59,6 +59,7 @@ async def tailor_resume(
     user_pinned: list[str] | None = None,
     deep_tailor: bool = False,
     on_progress: ProgressFn | None = None,
+    system_prompt_addendum: str | None = None,
 ) -> TailorResult:
     progress = on_progress or _noop
     await progress("keywords_start", {})
@@ -67,6 +68,8 @@ async def tailor_resume(
     protected = resolve_protected_terms(user_pinned=user_pinned or [], jd_terms=keywords)
     tier: ModelTier = "opus" if deep_tailor else "sonnet"
     system = _SYSTEM_TEMPLATE.format(protected_terms_csv=", ".join(protected))
+    if system_prompt_addendum:
+        system = system + "\n\n" + system_prompt_addendum
     user = (
         "SOURCE_RESUME_LATEX:\n```latex\n" + master_latex + "\n```\n\n"
         "JOB_DESCRIPTION:\n```\n" + jd_text + "\n```"
