@@ -4,10 +4,11 @@ import ResumeList from "./routes/ResumeList";
 import Editor from "./routes/Editor";
 import Profile from "./routes/Profile";
 import Knowledge from "./routes/Knowledge";
+import OnboardingChat from "./routes/OnboardingChat";
 import Button from "./components/ui/Button";
 import { api } from "./api";
 
-type View = "list" | "editor" | "profile" | "knowledge";
+type View = "list" | "editor" | "profile" | "knowledge" | "onboarding";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -33,6 +34,13 @@ export default function App() {
     return (
       <Shell active="knowledge" onNav={(v) => setView(v)} onHome={goList}>
         <Knowledge onBack={goList} />
+      </Shell>
+    );
+  }
+  if (view === "onboarding") {
+    return (
+      <Shell active="onboarding" onNav={(v) => setView(v)} onHome={goList}>
+        <OnboardingChat onBack={goList} />
       </Shell>
     );
   }
@@ -93,6 +101,13 @@ function Shell({
           onClick={() => onNav("knowledge")}
         >
           Knowledge
+        </Button>
+        <Button
+          size="sm"
+          variant={active === "onboarding" ? "subtle" : "ghost"}
+          onClick={() => onNav("onboarding")}
+        >
+          Onboarding
         </Button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>{children}</div>

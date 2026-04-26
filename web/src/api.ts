@@ -435,6 +435,66 @@ export async function putProfile(profile: Profile): Promise<Profile> {
   return jsonOrThrow<Profile>(res);
 }
 
+// ── Onboarding chat ─────────────────────────────────────────────────────────
+
+export type OnboardingTurn = { role: "user" | "assistant"; content: string };
+
+export type OnboardingToolEvent =
+  | { type: "tool_use"; tool: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; result: Record<string, unknown> }
+  | { type: "tool_error"; tool: string; error: string };
+
+export interface OnboardingCallbacks {
+  onChunk?: (text: string) => void;
+  onTool?: (event: OnboardingToolEvent) => void;
+  onError?: (message: string) => void;
+  onDone?: () => void;
+}
+
+export async function streamOnboarding(
+  message: string,
+  history: OnboardingTurn[],
+  cb: OnboardingCallbacks = {},
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/onboarding/message`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ message, history }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    cb.onError?.(await res.text().catch(() => `HTTP ${res.status}`));
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const evt = parseSseEvent(raw);
+      if (!evt) continue;
+      try {
+        const data = JSON.parse(evt.data || "{}");
+        if (evt.event === "text") cb.onChunk?.(data.text || "");
+        else if (evt.event === "tool_use") cb.onTool?.({ type: "tool_use", tool: data.tool, input: data.input || {} });
+        else if (evt.event === "tool_result") cb.onTool?.({ type: "tool_result", tool: data.tool, result: data.result || {} });
+        else if (evt.event === "tool_error") cb.onTool?.({ type: "tool_error", tool: data.tool, error: data.error || "" });
+        else if (evt.event === "done") cb.onDone?.();
+      } catch {
+        // ignore malformed frame
+      }
+    }
+  }
+}
+
 // ── Knowledge base ──────────────────────────────────────────────────────────
 
 export type KbSourceName = "latex_master" | "markdown";
@@ -546,6 +606,7 @@ export const api = {
     return res.json();
   },
   streamEdit,
+  streamOnboarding,
   acceptEdit,
   tailorToJd,
   listGroupedResumes,
