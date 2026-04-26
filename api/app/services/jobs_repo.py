@@ -173,6 +173,26 @@ async def enqueue_classify_posting(
     return job_id
 
 
+async def enqueue_prepare_application(
+    db: AsyncSession, *, posting_id: int
+) -> uuid.UUID:
+    """Insert a queued ``prepare_application`` job for ``posting_id``.
+
+    Caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="prepare_application",
+            status="queued",
+            payload={"posting_id": posting_id},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:
     """Mark a queued or running job as cancelled. Returns True if a row changed."""
     async with sf() as s:
