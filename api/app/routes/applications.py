@@ -12,6 +12,7 @@ Slice 2 surfaces prepared applications for human review:
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -26,6 +27,8 @@ from app.schemas.application import (
     ApplicationListOut,
     ApplicationOut,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -81,7 +84,10 @@ async def _serialize_application(
 
 
 async def _latest_pdf_url(
-    db: AsyncSession, resume_id: int | None
+    db: AsyncSession,
+    resume_id: int | None,
+    *,
+    application_id: int | None = None,
 ) -> str | None:
     """Return a presigned URL for the latest compiled PDF of ``resume_id``.
 
@@ -109,6 +115,12 @@ async def _latest_pdf_url(
 
         return presign_get(key=v.compiled_pdf_key)
     except Exception:
+        logger.warning(
+            "presign failed for application %s resume %s",
+            application_id,
+            resume_id,
+            exc_info=True,
+        )
         return None
 
 
@@ -171,7 +183,9 @@ async def get_application(
     base.update(
         {
             "resume_variant_id": app.resume_variant_id,
-            "resume_pdf_url": await _latest_pdf_url(db, app.resume_variant_id),
+            "resume_pdf_url": await _latest_pdf_url(
+                db, app.resume_variant_id, application_id=app.id
+            ),
             "canonical_key": app.canonical_key,
             "prepared_at": app.prepared_at,
         }

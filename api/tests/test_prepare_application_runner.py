@@ -273,6 +273,92 @@ async def test_prepare_application_skips_duplicate(
 
 
 @pytest.mark.asyncio
+async def test_prepare_application_race_collision(
+    monkeypatch, sessionmaker_factory
+):
+    """Pre-submit gate misses; unique constraint catches duplicate at flush.
+
+    Simulates a race where the gate ``SELECT`` returns no row, but a
+    competing path inserts an :class:`Application` with the same
+    canonical_key before the orchestrator's flush. The
+    :class:`IntegrityError` handler must rollback, mark the posting
+    ``duplicate_skipped`` from a fresh session, and finish the job
+    ``succeeded`` with ``skipped=True``.
+    """
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    await _seed_profile(sm)
+    await _seed_master_resume(sm)
+    company_id = await _seed_company(sm)
+    posting_id = await _seed_posting(sm, company_id=company_id)
+
+    # Patch tailor with the standard fake (creates a real variant Resume).
+    _patch_primitives(monkeypatch)
+
+    from app.services.canonical import canonicalize
+
+    # Override generate_cover_letter to ALSO insert a competing Application
+    # row with the same canonical_key right before returning. This bypasses
+    # the orchestrator's pre-submit gate (which already ran) and forces the
+    # IntegrityError on the orchestrator's own flush.
+    async def racing_cover(db, *, user_id, posting_id):
+        posting = await db.get(JobPosting, posting_id)
+        company_name = None
+        if posting.company_id is not None:
+            company_row = await db.get(Company, posting.company_id)
+            if company_row is not None:
+                company_name = company_row.display_name
+        canon = canonicalize(company_name, posting.apply_url)
+        db.add(
+            Application(
+                user_id=user_id,
+                posting_id=posting_id,
+                mode="B",
+                status="prepared",
+                cover_letter_text=None,
+                form_payload={},
+                canonical_key=canon,
+            )
+        )
+        await db.commit()
+        return "racing cover letter"
+
+    monkeypatch.setattr(jobs_runner, "generate_cover_letter", racing_cover)
+    monkeypatch.setattr(cover_letter, "generate_cover_letter", racing_cover)
+
+    async with sm() as s:
+        jid = await enqueue_prepare_application(s, posting_id=posting_id)
+        await s.commit()
+
+    await _drain(sm)
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "succeeded", job.result
+        assert job.result["skipped"] is True
+        assert job.result["posting_id"] == posting_id
+
+        posting = (
+            await s.execute(
+                select(JobPosting).where(JobPosting.id == posting_id)
+            )
+        ).scalar_one()
+        # The IntegrityError handler flipped the posting from "preparing"
+        # to "duplicate_skipped" via a fresh session.
+        assert posting.status == "duplicate_skipped"
+
+        apps = (
+            await s.execute(
+                select(Application).where(Application.posting_id == posting_id)
+            )
+        ).scalars().all()
+        # Only the racing row survived — the orchestrator's insert was
+        # rolled back, not committed twice.
+        assert len(apps) == 1
+        assert apps[0].cover_letter_text is None
+
+
+@pytest.mark.asyncio
 async def test_prepare_application_seeds_form_payload_from_profile(
     monkeypatch, sessionmaker_factory
 ):
