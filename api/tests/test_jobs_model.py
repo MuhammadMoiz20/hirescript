@@ -1,18 +1,6 @@
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from app.models import Base, Job, JobEvent
-
-
-@pytest.fixture
-async def db_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with SessionLocal() as s:
-        yield s
+from app.models import Job, JobEvent
 
 
 @pytest.mark.asyncio

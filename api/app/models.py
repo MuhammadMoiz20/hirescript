@@ -87,7 +87,7 @@ class ResumeVersion(Base):
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
+        Uuid(),
         primary_key=True,
         default=uuid.uuid4,
     )
@@ -100,7 +100,7 @@ class Job(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
     batch_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True, index=True
+        Uuid(), nullable=True, index=True
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -121,7 +121,7 @@ class JobEvent(Base):
         autoincrement=True,
     )
     job_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
+        Uuid(),
         ForeignKey("jobs.id", ondelete="CASCADE"),
         index=True,
     )
