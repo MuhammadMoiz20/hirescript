@@ -188,8 +188,13 @@ class Job(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+    # Identity is (slug, source) — see migration 0012 for the constraint
+    # broadening rationale (linear:greenhouse vs linear:ashby etc).
+    __table_args__ = (
+        UniqueConstraint("slug", "source", name="uq_companies_slug_source"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="greenhouse"
@@ -261,6 +266,8 @@ class Application(Base):
     mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="B", default="B"
     )
+    # status values: "prepared" | "submitting" | "submitted"
+    # | "captcha_pause" | "errored" | "duplicate_skipped"
     status: Mapped[str] = mapped_column(Text, nullable=False)
     resume_variant_id: Mapped[int | None] = mapped_column(
         ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True
@@ -275,6 +282,14 @@ class Application(Base):
     )
     canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verify_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verify_issues: Mapped[list[str]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    verify_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     prepared_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -311,6 +326,89 @@ class AnswerCache(Base):
     __table_args__ = (
         UniqueConstraint(
             "user_id", "question_hash", name="uq_answer_cache_user_qhash"
+        ),
+    )
+
+
+class Tier(Base):
+    __tablename__ = "tiers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    min_fit_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    daily_cap: Mapped[int] = mapped_column(Integer, nullable=False)
+    default_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    tailor_model: Mapped[str] = mapped_column(Text, nullable=False)
+    classify_model: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="haiku-4.5", default="haiku-4.5"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ClaudeUsage(Base):
+    __tablename__ = "claude_usage"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    client: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    task_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    __table_args__ = (
+        Index(
+            "ix_claude_usage_client_started",
+            "client",
+            "started_at",
+        ),
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    meta: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    __table_args__ = (
+        Index(
+            "ix_notifications_user_created",
+            "user_id",
+            "created_at",
         ),
     )
 

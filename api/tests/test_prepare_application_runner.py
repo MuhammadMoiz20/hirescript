@@ -16,7 +16,7 @@ from app.models import (
     Resume,
     User,
 )
-from app.services import answer_cache, cover_letter, jobs_runner
+from app.services import answer_cache, cover_letter, jobs_runner, verify as verify_mod
 from app.services.jobs_repo import enqueue_prepare_application
 from app.services.tailor_for_application import TailorForAppResult
 
@@ -151,6 +151,11 @@ def _patch_primitives(monkeypatch, *, variant_id_holder=None):
     # also patch the cover_letter module (defensive against direct imports)
     monkeypatch.setattr(cover_letter, "generate_cover_letter", fake_cover)
 
+    async def fake_verify(db, *, application_id):
+        return {"ok": True, "issues": [], "rationale": "all grounded"}
+
+    monkeypatch.setattr(verify_mod, "verify_application", fake_verify)
+
 
 @pytest.mark.asyncio
 async def test_prepare_application_happy_path(
@@ -205,6 +210,10 @@ async def test_prepare_application_happy_path(
         assert app.form_payload["github"].endswith("moiz")
         assert app.canonical_key == posting.canonical_key
         assert app.resume_variant_id is not None
+        # Verify pass populated the three columns on the row.
+        assert app.verify_ok is True
+        assert app.verify_issues == []
+        assert app.verify_rationale == "all grounded"
 
 
 @pytest.mark.asyncio
@@ -425,6 +434,56 @@ async def test_prepare_application_uses_answer_cache(
             )
         ).scalar_one()
         assert app.form_payload["why_company"] == "Because of the mission."
+
+
+@pytest.mark.asyncio
+async def test_prepare_application_survives_verifier_exception(
+    monkeypatch, sessionmaker_factory
+):
+    """A verifier exception must NOT block preparation.
+
+    The application is still created with verify_ok=None, the job ends
+    succeeded, and a ``verify_skipped`` event is emitted.
+    """
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    await _seed_profile(sm)
+    await _seed_master_resume(sm)
+    company_id = await _seed_company(sm)
+    posting_id = await _seed_posting(sm, company_id=company_id)
+
+    _patch_primitives(monkeypatch)
+
+    async def boom_verify(db, *, application_id):
+        raise RuntimeError("haiku exploded")
+
+    monkeypatch.setattr(verify_mod, "verify_application", boom_verify)
+
+    async with sm() as s:
+        jid = await enqueue_prepare_application(s, posting_id=posting_id)
+        await s.commit()
+    await _drain(sm)
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "succeeded", job.result
+
+        app = (
+            await s.execute(
+                select(Application).where(Application.posting_id == posting_id)
+            )
+        ).scalar_one()
+        # Application was created, but verify_ok is None because the
+        # verifier raised — submit (Batch C) will treat None as
+        # "not verified, allow only B-mode".
+        assert app.verify_ok is None
+        assert app.verify_issues == []
+        assert app.verify_rationale is None
+
+        events = (
+            await s.execute(select(JobEvent).where(JobEvent.job_id == jid))
+        ).scalars().all()
+        assert any(e.phase == "verify_skipped" for e in events)
 
 
 @pytest.mark.asyncio

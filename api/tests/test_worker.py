@@ -7,10 +7,15 @@ import asyncio
 import pytest
 from sqlalchemy import select, update
 
-from app.models import Company, Job
-from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
-
-
+from app.models import (
+    Application,
+    Company,
+    Job,
+    JobPosting,
+    Resume,
+    Tier,
+    User,
+)
 @pytest.mark.asyncio
 async def test_worker_drains_one_job(
     monkeypatch, sessionmaker_factory, seeded_master_resume
@@ -114,59 +119,6 @@ async def test_worker_dispatches_via_runners_table(
 
 
 @pytest.mark.asyncio
-async def test_scheduler_seeds_companies_on_first_boot(sessionmaker_factory):
-    from app.worker import _seed_companies
-
-    await _seed_companies(sessionmaker_factory)
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        slugs = {r.slug for r in rows}
-        assert slugs == {slug for slug, _ in GREENHOUSE_COMPANIES}
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-
-    # Re-running is idempotent: row count unchanged, no duplicate-slug failure.
-    await _seed_companies(sessionmaker_factory)
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-
-
-@pytest.mark.asyncio
-async def test_seed_companies_adds_only_missing_slugs(sessionmaker_factory):
-    """Pre-seed a subset of allowlist slugs; reconcile must add the rest
-    while leaving pre-existing rows untouched (e.g. an operator-edited
-    display_name must not be overwritten)."""
-    from app.worker import _seed_companies
-
-    pre_seeded = list(GREENHOUSE_COMPANIES)[:2]
-    custom_display = "Operator Edited Display"
-
-    async with sessionmaker_factory() as s:
-        for slug, _display in pre_seeded:
-            s.add(
-                Company(
-                    slug=slug,
-                    display_name=custom_display,
-                    source="greenhouse",
-                    enabled=True,
-                )
-            )
-        await s.commit()
-
-    await _seed_companies(sessionmaker_factory)
-
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        slugs = {r.slug for r in rows}
-        assert slugs == {slug for slug, _ in GREENHOUSE_COMPANIES}
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-        # Pre-seeded rows preserved verbatim — display_name not overwritten.
-        by_slug = {r.slug: r for r in rows}
-        for slug, _display in pre_seeded:
-            assert by_slug[slug].display_name == custom_display
-
-
-@pytest.mark.asyncio
 async def test_scheduler_loops_and_shuts_down_cleanly(
     monkeypatch, sessionmaker_factory
 ):
@@ -210,12 +162,375 @@ async def test_scheduler_enqueues_ingest_per_enabled_company(
     async with sessionmaker_factory() as s:
         jobs = (
             await s.execute(
-                select(Job).where(Job.kind == "ingest_greenhouse")
+                select(Job).where(Job.kind == "ingest_source")
             )
         ).scalars().all()
-        slugs = sorted((j.payload or {}).get("company_slug") for j in jobs)
-        assert slugs == ["a", "b"]
+        payloads = sorted(
+            (
+                (j.payload or {}).get("source"),
+                (j.payload or {}).get("company_slug"),
+            )
+            for j in jobs
+        )
+        assert payloads == [("greenhouse", "a"), ("greenhouse", "b")]
         assert all(j.status == "queued" for j in jobs)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_enqueues_ingest_for_every_source(
+    sessionmaker_factory,
+):
+    """Two greenhouse + one lever + one ashby company yields four
+    ``ingest_source`` jobs on a single tick; a re-tick adds none.
+    """
+    from app.worker import _enqueue_due_ingests
+
+    async with sessionmaker_factory() as s:
+        s.add(Company(slug="g1", display_name="G1", source="greenhouse", enabled=True))
+        s.add(Company(slug="g2", display_name="G2", source="greenhouse", enabled=True))
+        s.add(Company(slug="l1", display_name="L1", source="lever", enabled=True))
+        s.add(Company(slug="a1", display_name="A1", source="ashby", enabled=True))
+        s.add(Company(slug="dis", display_name="Dis", source="workable", enabled=False))
+        await s.commit()
+
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        pairs = sorted(
+            (
+                (j.payload or {}).get("source"),
+                (j.payload or {}).get("company_slug"),
+            )
+            for j in jobs
+        )
+        assert pairs == [
+            ("ashby", "a1"),
+            ("greenhouse", "g1"),
+            ("greenhouse", "g2"),
+            ("lever", "l1"),
+        ]
+
+    # Second tick must not duplicate any (source, slug) pair.
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        assert len(jobs) == 4
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dedups_against_legacy_ingest_greenhouse_kind(
+    sessionmaker_factory,
+):
+    """Backwards compat — a legacy ``ingest_greenhouse`` job in flight
+    for ``(greenhouse, x)`` must suppress a fresh enqueue."""
+    from app.worker import _enqueue_due_ingests
+
+    async with sessionmaker_factory() as s:
+        s.add(Company(slug="x", display_name="X", source="greenhouse", enabled=True))
+        s.add(
+            Job(
+                kind="ingest_greenhouse",
+                status="queued",
+                payload={"company_slug": "x"},
+            )
+        )
+        await s.commit()
+
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        new_jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        # Legacy in-flight job suppresses the new ingest_source enqueue.
+        assert new_jobs == []
+
+
+async def _seed_amode_app(
+    sm,
+    *,
+    source_job_id: str,
+    tier: str = "targeted",
+    company_id: int,
+    variant_id: int,
+) -> int:
+    async with sm() as s:
+        p = JobPosting(
+            user_id=1,
+            source="greenhouse",
+            source_job_id=source_job_id,
+            company_id=company_id,
+            title="Backend",
+            location="Remote",
+            apply_url=f"https://example.test/jobs/{source_job_id}",
+            description_text="x",
+            meta={},
+            tier=tier,
+            fit_score=70,
+            status="ready",
+        )
+        s.add(p)
+        await s.commit()
+        await s.refresh(p)
+        a = Application(
+            user_id=1,
+            posting_id=p.id,
+            mode="A",
+            status="prepared",
+            resume_variant_id=variant_id,
+            cover_letter_text="x",
+            form_payload={},
+            canonical_key=f"acme|jobs/{source_job_id}",
+            verify_ok=True,
+        )
+        s.add(a)
+        await s.commit()
+        await s.refresh(a)
+        return a.id
+
+
+@pytest.mark.asyncio
+async def test_scheduler_enqueues_amode_submits_within_cap(
+    sessionmaker_factory,
+):
+    """3 prepared A-mode applications under a tier with daily_cap=2 must
+    yield exactly 2 enqueued submit_application jobs on a single tick."""
+    from app.worker import _enqueue_due_amode_submits
+
+    sm = sessionmaker_factory
+    async with sm() as s:
+        s.add(User(id=1))
+        s.add(
+            Tier(
+                slug="targeted",
+                display_name="Targeted",
+                min_fit_score=65,
+                daily_cap=2,
+                default_mode="A",
+                tailor_model="sonnet-4.6",
+                classify_model="haiku-4.5",
+                enabled=True,
+            )
+        )
+        c = Company(slug="acme", display_name="Acme", source="greenhouse")
+        s.add(c)
+        r = Resume(
+            user_id=1,
+            kind="variant",
+            name="V",
+            template_id="jakes",
+            latex_source="x",
+            protected_terms=[],
+        )
+        s.add(r)
+        await s.commit()
+        company_id = c.id
+        variant_id = r.id
+
+    a1 = await _seed_amode_app(
+        sm, source_job_id="1", company_id=company_id, variant_id=variant_id
+    )
+    a2 = await _seed_amode_app(
+        sm, source_job_id="2", company_id=company_id, variant_id=variant_id
+    )
+    a3 = await _seed_amode_app(
+        sm, source_job_id="3", company_id=company_id, variant_id=variant_id
+    )
+
+    await _enqueue_due_amode_submits(sm)
+
+    async with sm() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "submit_application")
+            )
+        ).scalars().all()
+        app_ids = sorted(
+            (j.payload or {}).get("application_id") for j in jobs
+        )
+        # cap=2 → exactly 2 of {a1, a2, a3} enqueued.
+        assert len(jobs) == 2
+        assert set(app_ids).issubset({a1, a2, a3})
+
+
+@pytest.mark.asyncio
+async def test_scheduler_amode_skips_apps_with_inflight_submit(
+    sessionmaker_factory,
+):
+    from app.worker import _enqueue_due_amode_submits
+
+    sm = sessionmaker_factory
+    async with sm() as s:
+        s.add(User(id=1))
+        s.add(
+            Tier(
+                slug="targeted",
+                display_name="Targeted",
+                min_fit_score=65,
+                daily_cap=10,
+                default_mode="A",
+                tailor_model="sonnet-4.6",
+                classify_model="haiku-4.5",
+                enabled=True,
+            )
+        )
+        c = Company(slug="acme", display_name="Acme", source="greenhouse")
+        s.add(c)
+        r = Resume(
+            user_id=1,
+            kind="variant",
+            name="V",
+            template_id="jakes",
+            latex_source="x",
+            protected_terms=[],
+        )
+        s.add(r)
+        await s.commit()
+        company_id = c.id
+        variant_id = r.id
+
+    a1 = await _seed_amode_app(
+        sm, source_job_id="1", company_id=company_id, variant_id=variant_id
+    )
+
+    # Pre-existing queued submit job for a1 — scheduler must skip.
+    async with sm() as s:
+        s.add(
+            Job(
+                kind="submit_application",
+                status="queued",
+                payload={"application_id": a1},
+            )
+        )
+        await s.commit()
+
+    await _enqueue_due_amode_submits(sm)
+
+    async with sm() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "submit_application")
+            )
+        ).scalars().all()
+        # Exactly the one pre-existing job remains; scheduler did not
+        # double-enqueue.
+        assert len(jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_amode_kill_switch_skips_branch(
+    monkeypatch, sessionmaker_factory
+):
+    from app.worker import _enqueue_due_amode_submits
+
+    sm = sessionmaker_factory
+    async with sm() as s:
+        s.add(User(id=1))
+        s.add(
+            Tier(
+                slug="targeted",
+                display_name="Targeted",
+                min_fit_score=65,
+                daily_cap=10,
+                default_mode="A",
+                tailor_model="sonnet-4.6",
+                classify_model="haiku-4.5",
+                enabled=True,
+            )
+        )
+        c = Company(slug="acme", display_name="Acme", source="greenhouse")
+        s.add(c)
+        r = Resume(
+            user_id=1,
+            kind="variant",
+            name="V",
+            template_id="jakes",
+            latex_source="x",
+            protected_terms=[],
+        )
+        s.add(r)
+        await s.commit()
+        company_id = c.id
+        variant_id = r.id
+
+    await _seed_amode_app(
+        sm, source_job_id="1", company_id=company_id, variant_id=variant_id
+    )
+
+    monkeypatch.setenv("AUTONOMOUS_SUBMIT_DISABLED", "1")
+    await _enqueue_due_amode_submits(sm)
+
+    async with sm() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "submit_application")
+            )
+        ).scalars().all()
+        assert jobs == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_enqueues_one_ingest_gmail_per_tick(
+    monkeypatch, sessionmaker_factory
+):
+    """With GMAIL_USER set, a single tick enqueues one ingest_gmail
+    job; a second tick must dedup against the still-queued job."""
+    from app.worker import _enqueue_due_gmail
+
+    monkeypatch.setenv("GMAIL_USER", "me@example.com")
+
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert len(jobs) == 1
+        assert jobs[0].status == "queued"
+
+    # Second tick: the still-queued job suppresses a second enqueue.
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert len(jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_gmail_when_env_unset(
+    monkeypatch, sessionmaker_factory
+):
+    from app.worker import _enqueue_due_gmail
+
+    monkeypatch.delenv("GMAIL_USER", raising=False)
+
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert jobs == []
 
 
 @pytest.mark.asyncio
@@ -230,9 +545,9 @@ async def test_scheduler_skips_companies_with_in_flight_ingest(
         # Pre-existing queued ingest for "a" — scheduler must skip it.
         s.add(
             Job(
-                kind="ingest_greenhouse",
+                kind="ingest_source",
                 status="queued",
-                payload={"company_slug": "a"},
+                payload={"source": "greenhouse", "company_slug": "a"},
             )
         )
         await s.commit()
@@ -242,7 +557,9 @@ async def test_scheduler_skips_companies_with_in_flight_ingest(
     async with sessionmaker_factory() as s:
         jobs = (
             await s.execute(
-                select(Job).where(Job.kind == "ingest_greenhouse")
+                select(Job).where(
+                    Job.kind.in_(("ingest_source", "ingest_greenhouse"))
+                )
             )
         ).scalars().all()
         slugs_per_job = [(j.payload or {}).get("company_slug") for j in jobs]

@@ -211,6 +211,41 @@ async def submit_application(
     return {"job_id": str(job_id)}
 
 
+@router.post("/{application_id}/promote_to_A", response_model=ApplicationOut)
+async def promote_to_a(
+    application_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Flip an application to A-mode.
+
+    If the application is currently in ``captcha_pause`` (a hold imposed
+    after a failed challenge), reset it to ``prepared`` so the autonomous
+    scheduler picks it up on the next tick.
+    """
+    app = await _load_application_for_user(db, application_id, user_id)
+    app.mode = "A"
+    if app.status == "captcha_pause":
+        app.status = "prepared"
+    await db.commit()
+    await db.refresh(app)
+    return await _serialize_application(db, app)
+
+
+@router.post("/{application_id}/pause_A", response_model=ApplicationOut)
+async def pause_a(
+    application_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Flip an application back to B-mode (human gate)."""
+    app = await _load_application_for_user(db, application_id, user_id)
+    app.mode = "B"
+    await db.commit()
+    await db.refresh(app)
+    return await _serialize_application(db, app)
+
+
 @router.delete("/{application_id}", status_code=204)
 async def delete_application(
     application_id: int,

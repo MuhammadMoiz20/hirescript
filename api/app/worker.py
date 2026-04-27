@@ -16,19 +16,28 @@ import uuid
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Company, Job
+from app.models import Application, Company, Job, JobPosting, Tier
 from app.services import jobs_runner
 from app.services.jobs_repo import (
     claim_one,
-    enqueue_ingest_greenhouse,
+    count_submitted_today_for_tier,
+    enqueue_ingest_gmail,
+    enqueue_ingest_source,
+    enqueue_submit_application,
     reclaim_stale_jobs,
 )
-from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
+
+# NOTE: companies are seeded by Alembic migration 0012 — the boot-time
+# reconciliation that lived here was removed in slice 4 Batch A so the DB
+# is the single source of truth for the allowlist.
 
 log = logging.getLogger("worker")
 
 POLL_SEC = 1.0
 INGEST_INTERVAL_SEC = int(os.environ.get("INGEST_INTERVAL_SEC", "900"))
+GMAIL_POLL_INTERVAL_SEC = int(
+    os.environ.get("GMAIL_POLL_INTERVAL_SEC", "1800")
+)
 
 
 async def _dispatch(sf, job, sem: asyncio.Semaphore) -> None:
@@ -77,42 +86,19 @@ async def run_until_idle(
         await asyncio.gather(*inflight, return_exceptions=True)
 
 
-async def _seed_companies(sf) -> None:
-    """Reconcile :data:`GREENHOUSE_COMPANIES` into the companies table on every boot.
-
-    For each (slug, display) in the allowlist, INSERT if missing. Existing
-    rows are not modified — operator-disabled or display-name-edited rows
-    are preserved.
-    """
-    async with sf() as s:
-        existing_slugs = set(
-            (await s.execute(select(Company.slug))).scalars().all()
-        )
-        added = 0
-        for slug, display in GREENHOUSE_COMPANIES:
-            if slug not in existing_slugs:
-                s.add(
-                    Company(
-                        slug=slug,
-                        display_name=display,
-                        source="greenhouse",
-                        enabled=True,
-                    )
-                )
-                added += 1
-        if added:
-            await s.commit()
-            log.info("seeded %d new companies", added)
-
-
 async def _enqueue_due_ingests(sf) -> None:
-    """Enqueue an ``ingest_greenhouse`` job for every enabled company that
-    does not already have one queued or running.
+    """Enqueue an ``ingest_source`` job for every enabled ``(source, slug)``
+    pair that does not already have one queued or running.
 
-    JSONB ``->>`` works on Postgres but not SQLite; rather than branch on
-    dialect we filter inflight jobs in Python after pulling the small set
-    of queued/running ingest jobs. The cardinality is bounded by
-    ``len(GREENHOUSE_COMPANIES)`` so this is cheap.
+    Walks the entire ``companies`` table — no source is hardcoded — and
+    dispatches via :func:`enqueue_ingest_source`. The dedup set inspects
+    both the new ``ingest_source`` kind and the legacy
+    ``ingest_greenhouse`` kind (still emitted by Batch A's compat shim)
+    so a job already in flight from either path suppresses a duplicate
+    enqueue. JSONB ``->>`` works on Postgres but not SQLite; we filter
+    in Python after pulling the small set of inflight ingest jobs. The
+    cardinality is bounded by the enabled-companies count so this is
+    cheap.
     """
     async with sf() as s:
         enabled = (
@@ -124,33 +110,179 @@ async def _enqueue_due_ingests(sf) -> None:
         inflight = (
             await s.execute(
                 select(Job).where(
-                    Job.kind == "ingest_greenhouse",
+                    Job.kind.in_(("ingest_source", "ingest_greenhouse")),
                     Job.status.in_(("queued", "running")),
                 )
             )
         ).scalars().all()
-        inflight_slugs = {
-            (j.payload or {}).get("company_slug") for j in inflight
-        }
+        # Build a set of (source, slug) pairs already in flight. The
+        # legacy ``ingest_greenhouse`` kind has no ``source`` key in its
+        # payload — treat it as ``greenhouse`` so a legacy job suppresses
+        # a fresh ``(greenhouse, slug)`` enqueue.
+        inflight_pairs: set[tuple[str, str | None]] = set()
+        for j in inflight:
+            payload = j.payload or {}
+            slug = payload.get("company_slug")
+            if j.kind == "ingest_greenhouse":
+                inflight_pairs.add(("greenhouse", slug))
+            else:
+                inflight_pairs.add((payload.get("source"), slug))
 
         for c in enabled:
-            if c.slug in inflight_slugs:
+            if (c.source, c.slug) in inflight_pairs:
                 continue
-            await enqueue_ingest_greenhouse(s, company_slug=c.slug)
+            await enqueue_ingest_source(
+                s, source=c.source, company_slug=c.slug
+            )
+            # Track in-memory so the same tick doesn't double-enqueue if
+            # the companies table somehow lists the same pair twice.
+            inflight_pairs.add((c.source, c.slug))
+        await s.commit()
+
+
+async def _enqueue_due_amode_submits(sf) -> None:
+    """Enqueue ``submit_application`` jobs for prepared A-mode applications
+    whose tier still has cap headroom today.
+
+    Skips applications that already have a queued/running
+    ``submit_application`` job — mirrors the dedup pattern used by
+    :func:`_enqueue_due_ingests`. Honors the
+    ``AUTONOMOUS_SUBMIT_DISABLED=1`` kill switch by short-circuiting the
+    entire branch.
+    """
+    if os.environ.get("AUTONOMOUS_SUBMIT_DISABLED") == "1":
+        return
+
+    async with sf() as s:
+        # Pull the prepared A-mode applications + their posting tier.
+        prepared = (
+            await s.execute(
+                select(Application, JobPosting.tier)
+                .join(JobPosting, JobPosting.id == Application.posting_id)
+                .where(
+                    Application.status == "prepared",
+                    Application.mode == "A",
+                )
+                .order_by(Application.prepared_at)
+            )
+        ).all()
+
+        if not prepared:
+            return
+
+        # Look up tier policies in one shot.
+        tier_slugs = {t for _, t in prepared if t}
+        tier_rows = (
+            await s.execute(select(Tier).where(Tier.slug.in_(tier_slugs)))
+        ).scalars().all() if tier_slugs else []
+        tier_caps = {t.slug: t.daily_cap for t in tier_rows}
+
+        # Already-inflight submit jobs to dedup against.
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "submit_application",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        inflight_app_ids = {
+            (j.payload or {}).get("application_id") for j in inflight
+        }
+
+        # Track per-tier remaining headroom so we don't enqueue more than
+        # the cap allows on a single tick.
+        remaining: dict[str, int] = {}
+        for slug in tier_slugs:
+            cap = tier_caps.get(slug, 0) or 0
+            if cap <= 0:
+                remaining[slug] = 0
+            else:
+                today = await count_submitted_today_for_tier(
+                    s, tier_slug=slug
+                )
+                remaining[slug] = max(0, cap - today)
+
+        for app, tier_slug in prepared:
+            if not tier_slug:
+                continue
+            if remaining.get(tier_slug, 0) <= 0:
+                continue
+            if app.id in inflight_app_ids:
+                continue
+            await enqueue_submit_application(s, application_id=app.id)
+            remaining[tier_slug] -= 1
+            inflight_app_ids.add(app.id)
+
+        await s.commit()
+
+
+async def _enqueue_due_gmail(sf) -> None:
+    """Enqueue an ``ingest_gmail`` job if none currently queued/running.
+
+    Skips entirely (silently) when ``GMAIL_USER`` is unset — the
+    digest source is opt-in via env. Single-tenant, so there's only
+    ever one in-flight gmail poll.
+    """
+    if not os.environ.get("GMAIL_USER"):
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "ingest_gmail",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        await enqueue_ingest_gmail(s)
         await s.commit()
 
 
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
-    """Periodically enqueue ingest_greenhouse jobs.
+    """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
     Runs once on entry, then every ``INGEST_INTERVAL_SEC`` seconds until
-    ``shutdown`` is set. Errors are logged but do not stop the loop.
+    ``shutdown`` is set. The gmail tick respects its own
+    ``GMAIL_POLL_INTERVAL_SEC`` cadence by only running when the
+    elapsed wall time since the last gmail enqueue exceeds the
+    interval. Errors in any branch are logged but do not stop the
+    loop.
     """
+    last_gmail_tick = 0.0
+    gmail_logged = False
+    if not os.environ.get("GMAIL_USER"):
+        log.info(
+            "scheduler: GMAIL_USER unset — skipping gmail digest polls"
+        )
+        gmail_logged = True
+    loop = asyncio.get_event_loop()
     while not shutdown.is_set():
         try:
             await _enqueue_due_ingests(sf)
         except Exception:
-            log.exception("scheduler error")
+            log.exception("scheduler error (ingest)")
+        try:
+            await _enqueue_due_amode_submits(sf)
+        except Exception:
+            log.exception("scheduler error (a-mode submits)")
+
+        if os.environ.get("GMAIL_USER"):
+            now = loop.time()
+            if (now - last_gmail_tick) >= GMAIL_POLL_INTERVAL_SEC:
+                try:
+                    await _enqueue_due_gmail(sf)
+                    last_gmail_tick = now
+                except Exception:
+                    log.exception("scheduler error (gmail)")
+        elif not gmail_logged:
+            log.info(
+                "scheduler: GMAIL_USER unset — skipping gmail digest polls"
+            )
+            gmail_logged = True
+
         try:
             await asyncio.wait_for(
                 shutdown.wait(), timeout=INGEST_INTERVAL_SEC
@@ -167,7 +299,7 @@ async def main() -> None:
     log.info("worker %s starting concurrency=%d", worker_id, concurrency)
 
     await reclaim_stale_jobs(SessionLocal, after_seconds=60)
-    await _seed_companies(SessionLocal)
+    # Companies are seeded by Alembic migration 0012; no boot-time seed.
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()

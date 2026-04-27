@@ -8,13 +8,16 @@ from app.routes import (
     admin,
     applications,
     auth,
+    companies,
     jds,
     jobs,
     kb,
+    notifications,
     onboarding,
     postings,
     profile,
     resumes,
+    tiers,
     versions,
 )
 from app.services.storage import ensure_bucket
@@ -45,6 +48,9 @@ app.include_router(kb.router)
 app.include_router(onboarding.router)
 app.include_router(postings.router)
 app.include_router(applications.router)
+app.include_router(tiers.router)
+app.include_router(notifications.router)
+app.include_router(companies.router)
 app.include_router(admin.router)
 
 @app.get("/health")

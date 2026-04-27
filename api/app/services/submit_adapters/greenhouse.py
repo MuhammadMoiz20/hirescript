@@ -47,6 +47,27 @@ class SubmitResult(TypedDict):
     submitted_at: datetime
 
 
+class CaptchaContext(TypedDict):
+    """Payload handed to the optional ``on_captcha`` callback (and carried by
+    :class:`CaptchaPauseRequired`) when an in-page captcha is detected
+    post-submit. Screenshot bytes are PNG."""
+
+    url: str
+    screenshot_png: bytes
+
+
+class CaptchaPauseRequired(Exception):
+    """Raised mid-submit when the page renders a captcha challenge.
+
+    The runner catches this cleanly (no failed-job state) so a human can
+    resolve the challenge and the application can be re-queued.
+    """
+
+    def __init__(self, ctx: CaptchaContext) -> None:
+        self.ctx = ctx
+        super().__init__(f"captcha required at {ctx['url']}")
+
+
 class MissingFieldError(Exception):
     """Raised when a mandatory form field is absent from the rendered page."""
 
@@ -130,6 +151,17 @@ _DEFAULT_SCREENSHOT_DIR = "/app/compiled_pdfs/submit_screenshots"
 _NAV_TIMEOUT_MS = 30_000
 _CONFIRM_TIMEOUT_MS = 60_000
 
+# Selectors that indicate the page is asking the user to solve a captcha.
+# Detection is post-submit: a Greenhouse form occasionally interstitials a
+# challenge before producing the confirmation page. We don't try to solve
+# it — we screenshot and bubble up a structured pause so a human can.
+_CAPTCHA_SELECTORS: list[str] = [
+    'iframe[src*="recaptcha"]',
+    'iframe[title*="captcha"]',
+    '[data-testid*="captcha"]',
+    "text=/are you human/i",
+]
+
 
 async def _emit(
     on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None,
@@ -185,11 +217,24 @@ async def _fill_if_present(
     return True
 
 
+async def _detect_captcha(page: Any) -> bool:
+    """Return True if any of the known captcha selectors is present."""
+    for sel in _CAPTCHA_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() > 0:
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
 async def submit(
     ctx: SubmitContext,
     on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     *,
     screenshot_dir: str | None = None,
+    on_captcha: Callable[[CaptchaContext], Awaitable[None]] | None = None,
 ) -> SubmitResult:
     """Drive Playwright through a Greenhouse application form.
 
@@ -299,6 +344,8 @@ async def submit(
             )
             screenshot_path = os.path.join(out_dir, screenshot_name)
             try:
+                # Wait for either the confirmation heuristic OR a captcha
+                # element to appear. The post-wait check below disambiguates.
                 await page.wait_for_function(
                     """() => {
                         const u = (location.href || '').toLowerCase();
@@ -308,10 +355,18 @@ async def submit(
                         }
                         const t = (document.body && document.body.innerText || '')
                             .toLowerCase();
-                        return t.includes('thank you')
+                        if (t.includes('thank you')
                             || t.includes('received your application')
                             || t.includes('application received')
-                            || t.includes('your application has been');
+                            || t.includes('your application has been')
+                            || t.includes('are you human')) {
+                            return true;
+                        }
+                        return !!(
+                            document.querySelector('iframe[src*="recaptcha"]') ||
+                            document.querySelector('iframe[title*="captcha"]') ||
+                            document.querySelector('[data-testid*="captcha"]')
+                        );
                     }""",
                     timeout=_CONFIRM_TIMEOUT_MS,
                 )
@@ -346,6 +401,42 @@ async def submit(
                     confirmation_html=timeout_html,
                     screenshot_path=screenshot_path,
                 ) from exc
+
+            # Disambiguate: if a captcha element is present, the wait fired
+            # because of the challenge — not a confirmation. Capture a PNG
+            # in-memory + invoke the optional callback (so the runner can
+            # persist artifacts), then raise the structured pause.
+            if await _detect_captcha(page):
+                try:
+                    captcha_url = page.url
+                except Exception:  # noqa: BLE001
+                    captcha_url = ""
+                try:
+                    captcha_png = await page.screenshot(full_page=True)
+                except Exception:  # noqa: BLE001
+                    captcha_png = b""
+                # Also persist to disk so the runner has a stable path even
+                # if it can't write the bytes itself.
+                try:
+                    with open(screenshot_path, "wb") as fh:
+                        fh.write(captcha_png)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "captcha screenshot disk write failed for %s",
+                        screenshot_path,
+                    )
+                cap_ctx: CaptchaContext = {
+                    "url": captcha_url,
+                    "screenshot_png": captcha_png,
+                }
+                if on_captcha is not None:
+                    try:
+                        await on_captcha(cap_ctx)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "on_captcha callback raised for %s", captcha_url
+                        )
+                raise CaptchaPauseRequired(cap_ctx)
 
             confirmation_html = await page.content()
             await page.screenshot(path=screenshot_path, full_page=True)

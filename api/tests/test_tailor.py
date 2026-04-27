@@ -74,3 +74,34 @@ async def test_passes_master_to_user_prompt(patches):
     await tailor_resume(master_latex="\\documentclass{article}\\begin{document}MASTER_BODY\\end{document}", jd_text="JD")
     assert "MASTER_BODY" in qj.call_args.kwargs["user_prompt"]
     assert "JD" in qj.call_args.kwargs["user_prompt"]
+
+
+async def test_records_usage_when_db_provided(patches, db_session):
+    """When ``db`` is threaded through, the router is consulted and a
+    ``claude_usage`` row is appended for the tailor task."""
+    from sqlalchemy import select
+
+    from app.models import ClaudeUsage, Tier
+
+    db_session.add(
+        Tier(
+            slug="targeted",
+            display_name="Targeted",
+            min_fit_score=65,
+            daily_cap=20,
+            default_mode="A",
+            tailor_model="sonnet-4.6",
+        )
+    )
+    await db_session.commit()
+
+    await tailor_resume(
+        master_latex="\\documentclass{article}\\begin{document}m\\end{document}",
+        jd_text="JD",
+        db=db_session,
+        tier_slug="targeted",
+    )
+    rows = (await db_session.execute(select(ClaudeUsage))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].task_kind == "tailor"
+    assert rows[0].model == "claude-sonnet-4-6"

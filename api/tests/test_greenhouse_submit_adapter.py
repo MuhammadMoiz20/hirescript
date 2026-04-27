@@ -160,3 +160,40 @@ async def test_greenhouse_submit_emits_progress_events(tmp_path):
     assert "uploaded_resume" in phases
     assert "submitting" in phases
     assert "confirmed" in phases
+
+
+@pytest.mark.asyncio
+async def test_greenhouse_submit_raises_captcha_pause_required(tmp_path):
+    """A reCAPTCHA iframe appearing after Submit must trigger
+    :class:`CaptchaPauseRequired` carrying screenshot bytes + URL.
+
+    The ``on_captcha`` callback fires once BEFORE the exception so the runner
+    can persist artifacts; the runner-level handler then catches the raise.
+    """
+    from app.services.submit_adapters import greenhouse
+
+    captured: list[dict] = []
+
+    async def on_captcha(ctx: dict) -> None:
+        captured.append(dict(ctx))
+
+    with _FixtureServer() as server:
+        ctx = _ctx(tmp_path, server, fixture="greenhouse_form_captcha.html")
+        with pytest.raises(greenhouse.CaptchaPauseRequired) as excinfo:
+            await greenhouse.submit(
+                ctx,  # type: ignore[arg-type]
+                screenshot_dir=str(tmp_path / "shots"),
+                on_captcha=on_captcha,
+            )
+
+    err = excinfo.value
+    assert err.ctx["url"]
+    assert isinstance(err.ctx["screenshot_png"], (bytes, bytearray))
+    assert len(err.ctx["screenshot_png"]) > 0
+    # The PNG magic header sanity-checks that real bytes were captured.
+    assert err.ctx["screenshot_png"][:4] == b"\x89PNG"
+
+    # on_captcha invoked before the exception with the same context.
+    assert len(captured) == 1
+    assert captured[0]["url"] == err.ctx["url"]
+    assert captured[0]["screenshot_png"] == err.ctx["screenshot_png"]

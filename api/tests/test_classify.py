@@ -11,8 +11,9 @@ import pytest
 from sqlalchemy import select
 
 from app.models import JobPosting, Profile as ProfileModel, User
-from app.services import classify
+from app.services import classify, claude_router
 from app.services.agent import AgentError
+from app.models import ClaudeUsage
 
 
 async def _ensure_user(db) -> None:
@@ -97,6 +98,15 @@ async def test_classify_posting_writes_tier_and_score(monkeypatch, db_session):
     assert refreshed.fit_score == 72
     assert refreshed.classification_rationale == "Solid fit."
     assert refreshed.status == "classified"
+
+    # claude_router.record_usage was called for the classify task.
+    usage = (
+        await db_session.execute(select(ClaudeUsage))
+    ).scalars().all()
+    assert len(usage) == 1
+    assert usage[0].task_kind == "classify"
+    assert usage[0].client == "api"
+    assert usage[0].model == "claude-haiku-4-5"
 
 
 @pytest.mark.asyncio

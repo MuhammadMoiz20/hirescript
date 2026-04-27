@@ -12,6 +12,7 @@ import HistoryMassApply from "./routes/HistoryMassApply";
 import Dashboard from "./routes/Dashboard";
 import Tiers from "./routes/Tiers";
 import Settings from "./routes/Settings";
+import Companies from "./routes/Companies";
 import TopBar from "./components/suite/TopBar";
 import NavRail, { type NavKey } from "./components/suite/NavRail";
 import CommandPalette, { type CommandItem } from "./components/suite/CommandPalette";
@@ -38,6 +39,7 @@ export type View =
   | "dashboard"
   | "tiers"
   | "settings"
+  | "companies"
   | "history-massapply";
 
 /** Map current View → NavKey for highlighting NavRail. `null` = no highlight. */
@@ -63,6 +65,9 @@ function viewToNavKey(view: View): NavKey | null {
     case "tiers":
       return "tiers";
     case "settings":
+      return "settings";
+    case "companies":
+      // Sub-page under Settings — keep Settings highlighted in the rail.
       return "settings";
     case "history-massapply":
       return "history-massapply";
@@ -95,6 +100,8 @@ function viewToBreadcrumb(view: View): { section: string; route?: string } {
       return { section: "Mass-apply", route: "Tiers" };
     case "settings":
       return { section: "Suite", route: "Settings" };
+    case "companies":
+      return { section: "Settings", route: "Companies" };
     case "history-massapply":
       return { section: "Mass-apply", route: "History" };
     case "jobs":
@@ -209,6 +216,7 @@ function StateApp() {
       navItem("nav-knowledge", "Knowledge", () => onNavigate("knowledge"), "Mass-apply"),
       navItem("nav-tiers", "Tiers", () => onNavigate("tiers"), "Mass-apply"),
       navItem("nav-settings", "Settings", () => onNavigate("settings"), "Suite"),
+      navItem("nav-companies", "Companies", () => setView("companies"), "Settings"),
       {
         id: "act-toggle-theme",
         label: "Toggle theme",
@@ -248,7 +256,9 @@ function StateApp() {
   ) : view === "tiers" ? (
     <Tiers onBack={goOverview} />
   ) : view === "settings" ? (
-    <Settings onBack={goOverview} />
+    <Settings onBack={goOverview} onOpenCompanies={() => setView("companies")} />
+  ) : view === "companies" ? (
+    <Companies onBack={() => setView("settings")} />
   ) : view === "history-massapply" ? (
     <HistoryMassApply onBack={goOverview} />
   ) : (

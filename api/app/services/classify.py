@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, JobPosting, Profile as ProfileModel
 from app.schemas.profile import Profile
+from app.services import claude_router
 from app.services.agent import AgentError, query_json
 
 VALID_TIERS = {"dream", "targeted", "wide_net", "skip"}
@@ -95,10 +96,22 @@ async def classify_posting(db: AsyncSession, *, posting_id: int) -> dict[str, An
     profile = Profile.model_validate(profile_data)
 
     user_prompt = _build_user_prompt(posting, company_name, profile)
+    choice = await claude_router.choose(db, task_kind="classify")
     raw = await query_json(
         system_prompt=_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         tier="haiku",
+    )
+    # The Agent SDK doesn't surface token counts here; record a row anyway so
+    # the rolling-window counter sees the call. Token counts are best-effort
+    # in this slice; future work threads usage from the SDK response.
+    await claude_router.record_usage(
+        db,
+        client=choice["client"],
+        model=choice["model"],
+        task_kind="classify",
+        input_tokens=0,
+        output_tokens=0,
     )
 
     tier = raw.get("tier")

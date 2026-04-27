@@ -97,6 +97,8 @@ async def tailor_for_application(
         deep_tailor=False,
         on_progress=on_progress,
         system_prompt_addendum=addendum or None,
+        db=db,
+        tier_slug=posting.tier,
     )
 
     # Persist JD + variant + version snapshot. Mirrors run_tailor_job.

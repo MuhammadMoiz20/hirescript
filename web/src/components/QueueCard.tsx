@@ -10,8 +10,15 @@ interface Props {
   application: Application;
   onSubmit: (id: number) => void;
   onCancel: (id: number) => void;
+  /** Slice 3: invoked after the user manually submitted a captcha-paused
+   * application. Restores `mode="A"` so the autonomous loop owns it again. */
+  onResumeA?: (id: number) => void;
+  /** Slice 3: invoked from the verify-blocked banner — should route to the
+   * existing edit affordance (handled by the parent route). */
+  onEditAndRetry?: (id: number) => void;
   submitting?: boolean;
   cancelling?: boolean;
+  resumingA?: boolean;
 }
 
 function fmtElapsed(iso: string | null): string {
@@ -31,10 +38,23 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set([
   "queued", "running", "ok", "failed", "cancelled", "paused", "stuck",
   "errored", "prepared", "submitted", "duplicate_skipped",
 ]);
+// `captcha_pause` is a slice-3 application status. StatusPill doesn't have a
+// canonical glyph for it yet (it would belong on the per-application level,
+// not the run-pill set), so we render the captcha banner in its place.
 
 const KNOWN_TIERS: ReadonlySet<string> = new Set(["dream", "targeted", "wide", "skip"]);
 
-export default function QueueCard({ application, onSubmit, onCancel, submitting, cancelling }: Props) {
+export default function QueueCard({
+  application,
+  onSubmit,
+  onCancel,
+  onResumeA,
+  onEditAndRetry,
+  submitting,
+  cancelling,
+  resumingA,
+}: Props) {
+  const [verifyOpen, setVerifyOpen] = useState(false);
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,6 +158,24 @@ export default function QueueCard({ application, onSubmit, onCancel, submitting,
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {application.mode === "A" && (
+            <span
+              data-testid="queue-card-mode-a"
+              title="A-mode: autonomous submit"
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                padding: "2px 7px",
+                border: "1px solid var(--sonnet)",
+                color: "var(--sonnet)",
+                borderRadius: 999,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+              }}
+            >
+              A · auto
+            </span>
+          )}
           {tierKind && <TierBadge tier={tierKind} />}
           {application.posting.fit_score != null && (
             <FitChip score={application.posting.fit_score} />
@@ -184,6 +222,121 @@ export default function QueueCard({ application, onSubmit, onCancel, submitting,
           borderBottom: "1px solid var(--rule)",
         }}>
           <strong>Submission error:</strong> {application.error}
+        </div>
+      )}
+
+      {application.status === "captcha_pause" && (
+        <div
+          role="alert"
+          data-testid="queue-card-captcha-banner"
+          style={{
+            fontSize: 12.5,
+            padding: "10px 14px",
+            background: "color-mix(in oklch, var(--warn) 12%, var(--paper))",
+            color: "var(--ink)",
+            borderBottom: "1px solid var(--rule)",
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <strong>Captcha required</strong> — resolve manually then resume A-mode.
+            <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 2 }}>
+              Step 1: open the apply page and submit by hand. Step 2: tap
+              "Resolve & resume A" to hand the application back to the
+              autonomous loop.
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            data-testid="queue-card-resume-a-btn"
+            disabled={!onResumeA || resumingA}
+            onClick={() => onResumeA?.(application.id)}
+          >
+            {resumingA ? "Resuming…" : "Resolve & resume A"}
+          </Button>
+        </div>
+      )}
+
+      {application.verify_ok === false && (
+        <div
+          role="alert"
+          data-testid="queue-card-verify-banner"
+          style={{
+            fontSize: 12.5,
+            padding: "10px 14px",
+            background: "color-mix(in oklch, var(--err) 10%, var(--paper))",
+            color: "var(--ink)",
+            borderBottom: "1px solid var(--rule)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <strong>Verifier flagged unsupported claims.</strong>{" "}
+              {application.verify_rationale && (
+                <span style={{ color: "var(--ink-2)" }}>
+                  {application.verify_rationale}
+                </span>
+              )}
+            </div>
+            {application.verify_issues.length > 0 && (
+              <button
+                type="button"
+                data-testid="queue-card-verify-toggle"
+                onClick={() => setVerifyOpen((v) => !v)}
+                aria-expanded={verifyOpen}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--rule-strong)",
+                  borderRadius: 3,
+                  padding: "4px 8px",
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  color: "var(--ink-2)",
+                }}
+              >
+                {verifyOpen
+                  ? `Hide ${application.verify_issues.length} issue${application.verify_issues.length === 1 ? "" : "s"}`
+                  : `Show ${application.verify_issues.length} issue${application.verify_issues.length === 1 ? "" : "s"}`}
+              </button>
+            )}
+            <Button
+              size="sm"
+              variant="primary"
+              data-testid="queue-card-verify-edit-btn"
+              disabled={!onEditAndRetry}
+              onClick={() => onEditAndRetry?.(application.id)}
+            >
+              Edit &amp; retry
+            </Button>
+          </div>
+          {verifyOpen && application.verify_issues.length > 0 && (
+            <ul
+              data-testid="queue-card-verify-issues"
+              style={{
+                margin: "8px 0 0 18px",
+                padding: 0,
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: "var(--ink-2)",
+              }}
+            >
+              {application.verify_issues.map((issue, i) => (
+                <li key={i}>{issue}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

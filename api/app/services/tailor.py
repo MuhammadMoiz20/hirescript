@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services import claude_router
 from app.services.agent import query_json, AgentError, ModelTier
 from app.services.jd_parser import extract_keywords
 from app.services.enforcer import enforce_one_page
@@ -11,6 +14,14 @@ ProgressFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 async def _noop(event: str, data: dict[str, Any]) -> None:
     return None
+
+
+# Reverse map of router-emitted model IDs back to Agent SDK tier labels.
+_MODEL_ID_TO_TIER: dict[str, ModelTier] = {
+    "claude-haiku-4-5": "haiku",
+    "claude-sonnet-4-6": "sonnet",
+    "claude-opus-4-7": "opus",
+}
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,8 @@ async def tailor_resume(
     deep_tailor: bool = False,
     on_progress: ProgressFn | None = None,
     system_prompt_addendum: str | None = None,
+    db: AsyncSession | None = None,
+    tier_slug: str | None = None,
 ) -> TailorResult:
     progress = on_progress or _noop
     await progress("keywords_start", {})
@@ -67,6 +80,17 @@ async def tailor_resume(
     await progress("keywords_done", {"count": len(keywords)})
     protected = resolve_protected_terms(user_pinned=user_pinned or [], jd_terms=keywords)
     tier: ModelTier = "opus" if deep_tailor else "sonnet"
+    # Consult the router when we have a db session. If the router selects an
+    # opus/sonnet/haiku model id we map it back to the agent SDK tier so the
+    # downstream call still picks the right model. The deep_tailor flag wins
+    # because it represents an explicit user choice ("Deep tailor" button).
+    choice: claude_router.ClientChoice | None = None
+    if db is not None:
+        choice = await claude_router.choose(
+            db, task_kind="tailor", tier_slug=tier_slug
+        )
+        if not deep_tailor:
+            tier = _MODEL_ID_TO_TIER.get(choice["model"], tier)
     system = _SYSTEM_TEMPLATE.format(protected_terms_csv=", ".join(protected))
     if system_prompt_addendum:
         system = system + "\n\n" + system_prompt_addendum
@@ -76,6 +100,15 @@ async def tailor_resume(
     )
     await progress("draft_start", {"tier": tier})
     data = await query_json(system_prompt=system, user_prompt=user, tier=tier)
+    if db is not None and choice is not None:
+        await claude_router.record_usage(
+            db,
+            client=choice["client"],
+            model=choice["model"],
+            task_kind="tailor",
+            input_tokens=0,
+            output_tokens=0,
+        )
     candidate = data.get("latex")
     if not isinstance(candidate, str) or "\\documentclass" not in candidate:
         raise AgentError(f"unexpected tailor JSON: {data!r}")

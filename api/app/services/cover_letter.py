@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, JobPosting, Profile as ProfileModel
 from app.schemas.profile import Profile
-from app.services import kb_ingest
+from app.services import claude_router, kb_ingest
 from app.services.agent import query_text
 
 
@@ -112,6 +112,7 @@ async def generate_cover_letter(
         f"KB notes:\n{_format_kb_chunks(list(chunks))}\n"
     )
 
+    choice = await claude_router.choose(db, task_kind="cover_letter")
     text = (
         await query_text(
             system_prompt=_SYSTEM_PROMPT.format(
@@ -121,6 +122,14 @@ async def generate_cover_letter(
             tier="sonnet",
         )
     ).strip()
+    await claude_router.record_usage(
+        db,
+        client=choice["client"],
+        model=choice["model"],
+        task_kind="cover_letter",
+        input_tokens=0,
+        output_tokens=0,
+    )
     word_count = len(text.split())
     if word_count > 250:
         log.warning(

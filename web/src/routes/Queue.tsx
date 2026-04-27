@@ -53,7 +53,10 @@ export function applicationToLane(app: Application): LaneId | null {
   if (app.status === "submitted") return null;
   if (app.status === "errored" || app.status === "stuck") return "needs_you";
   if (app.status === "submitting" || app.status === "running") return "applying";
-  if (app.status === "paused") return "paused";
+  if (app.status === "paused" || app.status === "captcha_pause") return "paused";
+  // Verifier-blocked A-mode applications need user attention even though
+  // their status is still "prepared".
+  if (app.verify_ok === false && app.mode === "A") return "needs_you";
   // Default: B-mode review (prepared, pending, queued, anything else).
   if (app.mode === "B" || !app.mode) return "b_mode";
   // A-mode applications without a more specific status fall into Applying.
@@ -70,6 +73,9 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<number | null>(null);
   const [cancellingId, setCancellingId] = useState<number | null>(null);
+  const [resumingAId, setResumingAId] = useState<number | null>(null);
+  const [modeFilter, setModeFilter] = useState<"all" | "A" | "B">("all");
+  const [verifyFilter, setVerifyFilter] = useState<"all" | "blocked">("all");
 
   async function refresh() {
     setLoading(true);
@@ -102,6 +108,25 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
     }
   }
 
+  async function handleResumeA(id: number) {
+    setResumingAId(id);
+    try {
+      const updated = await api.promoteToA(id);
+      setItems((prev) => prev.map((a) => (a.id === id ? { ...a, ...updated } : a)));
+    } catch (e: any) {
+      setError(e?.detail ? String(e.detail) : e?.message || "Resume failed");
+    } finally {
+      setResumingAId(null);
+    }
+  }
+
+  function handleEditAndRetry(id: number) {
+    // Reuses the existing edit affordance — currently the per-application
+    // detail page lives at /queue/:id (parent-route navigation). If/when a
+    // dedicated edit URL lands, swap it in here.
+    go(`/queue/${id}`);
+  }
+
   async function handleCancel(id: number) {
     setCancellingId(id);
     try {
@@ -114,6 +139,14 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
     }
   }
 
+  const filteredItems = useMemo(() => {
+    return items.filter((app) => {
+      if (modeFilter !== "all" && app.mode !== modeFilter) return false;
+      if (verifyFilter === "blocked" && app.verify_ok !== false) return false;
+      return true;
+    });
+  }, [items, modeFilter, verifyFilter]);
+
   const byLane = useMemo(() => {
     const grouped: Record<LaneId, Application[]> = {
       needs_you: [],
@@ -121,12 +154,12 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
       applying: [],
       paused: [],
     };
-    for (const app of items) {
+    for (const app of filteredItems) {
       const lane = applicationToLane(app);
       if (lane) grouped[lane].push(app);
     }
     return grouped;
-  }, [items]);
+  }, [filteredItems]);
 
   return (
     <div
@@ -174,6 +207,73 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
           <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
             Refresh
           </Button>
+        </div>
+
+        {/* Slice 3 filters */}
+        <div
+          data-testid="queue-filters"
+          style={{
+            display: "flex",
+            gap: 12,
+            marginTop: 10,
+            alignItems: "center",
+            fontFamily: "var(--f-mono)",
+            fontSize: 11,
+            color: "var(--ink-3)",
+          }}
+        >
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            mode
+            <select
+              aria-label="Filter by mode"
+              value={modeFilter}
+              onChange={(e) =>
+                setModeFilter(e.target.value as "all" | "A" | "B")
+              }
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                padding: "2px 6px",
+                border: "1px solid var(--rule-strong)",
+                background: "var(--paper)",
+                color: "var(--ink)",
+              }}
+            >
+              <option value="all">all</option>
+              <option value="A">A only</option>
+              <option value="B">B only</option>
+            </select>
+          </label>
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            verify
+            <select
+              aria-label="Filter by verify status"
+              value={verifyFilter}
+              onChange={(e) =>
+                setVerifyFilter(e.target.value as "all" | "blocked")
+              }
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                padding: "2px 6px",
+                border: "1px solid var(--rule-strong)",
+                background: "var(--paper)",
+                color: "var(--ink)",
+              }}
+            >
+              <option value="all">all</option>
+              <option value="blocked">blocked only</option>
+            </select>
+          </label>
+          {(modeFilter !== "all" || verifyFilter !== "all") && (
+            <span data-testid="queue-filter-count">
+              {filteredItems.length}/{items.length} shown
+            </span>
+          )}
         </div>
       </header>
 
@@ -223,8 +323,11 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
             loading={loading}
             onSubmit={handleSubmit}
             onCancel={handleCancel}
+            onResumeA={handleResumeA}
+            onEditAndRetry={handleEditAndRetry}
             submittingId={submittingId}
             cancellingId={cancellingId}
+            resumingAId={resumingAId}
           />
         ))}
       </div>
@@ -238,11 +341,25 @@ interface LaneProps {
   loading: boolean;
   onSubmit: (id: number) => void;
   onCancel: (id: number) => void;
+  onResumeA: (id: number) => void;
+  onEditAndRetry: (id: number) => void;
   submittingId: number | null;
   cancellingId: number | null;
+  resumingAId: number | null;
 }
 
-function Lane({ spec, apps, loading, onSubmit, onCancel, submittingId, cancellingId }: LaneProps) {
+function Lane({
+  spec,
+  apps,
+  loading,
+  onSubmit,
+  onCancel,
+  onResumeA,
+  onEditAndRetry,
+  submittingId,
+  cancellingId,
+  resumingAId,
+}: LaneProps) {
   const futureLane = spec.id === "applying" || spec.id === "paused";
   const emptyText = futureLane && apps.length === 0
     ? "Coming in Slice 3"
@@ -351,8 +468,11 @@ function Lane({ spec, apps, loading, onSubmit, onCancel, submittingId, cancellin
               application={app}
               onSubmit={onSubmit}
               onCancel={onCancel}
+              onResumeA={onResumeA}
+              onEditAndRetry={onEditAndRetry}
               submitting={submittingId === app.id}
               cancelling={cancellingId === app.id}
+              resumingA={resumingAId === app.id}
             />
           ))
         )}

@@ -16,10 +16,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Job, JobEvent
+from app.models import Application, Job, JobEvent, JobPosting
 
 SessionFactory = Callable[[], AsyncSession]
 
@@ -132,13 +132,37 @@ async def emit_event(
         await s.commit()
 
 
+async def enqueue_ingest_source(
+    db: AsyncSession, *, source: str, company_slug: str
+) -> uuid.UUID:
+    """Insert a queued ``ingest_source`` job for ``(source, company_slug)``.
+
+    The runner looks up the adapter via :data:`app.services.sources.SOURCES`
+    so any registered source can be ingested through this single kind. The
+    caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="ingest_source",
+            status="queued",
+            payload={"source": source, "company_slug": company_slug},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def enqueue_ingest_greenhouse(
     db: AsyncSession, *, company_slug: str
 ) -> uuid.UUID:
-    """Insert a queued ``ingest_greenhouse`` job for ``company_slug``.
+    """Backwards-compat wrapper retained for slice-4 Batch A.
 
-    Caller owns the transaction (we only ``flush`` so the row is visible
-    inside their transaction; the caller commits). Returns the new job id.
+    The scheduler still calls this until Batch B Task 8 teaches it to
+    iterate the SOURCES registry. New call sites should prefer
+    :func:`enqueue_ingest_source` directly. The legacy ``ingest_greenhouse``
+    job kind also remains in :data:`RUNNERS` for one slice of compat.
     """
     job_id = uuid.uuid4()
     db.add(
@@ -147,6 +171,26 @@ async def enqueue_ingest_greenhouse(
             kind="ingest_greenhouse",
             status="queued",
             payload={"company_slug": company_slug},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
+async def enqueue_ingest_gmail(db: AsyncSession) -> uuid.UUID:
+    """Insert a queued ``ingest_gmail`` job (single-tenant, no params).
+
+    Caller owns the transaction (we only ``flush``); returns the new
+    job id. The runner reads ``user_id=1`` directly per the
+    single-tenant phase.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="ingest_gmail",
+            status="queued",
+            payload={},
         )
     )
     await db.flush()
@@ -211,6 +255,31 @@ async def enqueue_submit_application(
     )
     await db.flush()
     return job_id
+
+
+async def count_submitted_today_for_tier(
+    db: AsyncSession, *, tier_slug: str
+) -> int:
+    """Return today's (UTC) submitted-application count for ``tier_slug``.
+
+    Used by the autonomous-submit scheduler and the A-mode runner branch to
+    enforce per-tier daily caps. Counts ``Application`` rows joined to
+    ``JobPosting`` on ``posting_id`` where ``posting.tier == tier_slug`` AND
+    ``status == 'submitted'`` AND ``submitted_at >= start of today UTC``.
+    """
+    now = datetime.now(timezone.utc)
+    start_utc = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    stmt = (
+        select(func.count(Application.id))
+        .join(JobPosting, JobPosting.id == Application.posting_id)
+        .where(
+            JobPosting.tier == tier_slug,
+            Application.status == "submitted",
+            Application.submitted_at >= start_utc,
+        )
+    )
+    val = (await db.execute(stmt)).scalar_one()
+    return int(val or 0)
 
 
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:

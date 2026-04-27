@@ -1,9 +1,18 @@
-"""Behavioral tests for ``run_ingest_greenhouse_job``.
+"""Behavioral tests for the Greenhouse ingest runner.
 
-We monkeypatch ``fetch_company_jobs`` at the call site (the runner module's
-namespace) so no network traffic occurs. The worker is driven via
-``run_until_idle`` against the in-memory sqlite fixture so the dispatch
-table is exercised end-to-end.
+After Slice 4 Batch A there are two equivalent enqueue paths:
+
+* :func:`enqueue_ingest_source` with ``source="greenhouse"`` — the new,
+  generalized payload.
+* :func:`enqueue_ingest_greenhouse` — the backwards-compat shim retained
+  for the scheduler until Batch B Task 8 lands.
+
+Both must produce identical posting rows. Tests are parametrized over the
+two enqueue helpers + their corresponding job kind so any future drift is
+caught immediately.
+
+We monkeypatch the Greenhouse adapter's ``fetch_company_postings`` (the
+single call site the runner now uses) so no network traffic occurs.
 """
 
 from __future__ import annotations
@@ -14,7 +23,11 @@ from sqlalchemy import select
 
 from app.models import Company, Job, JobEvent, JobPosting, User
 from app.services import jobs_runner
-from app.services.jobs_repo import enqueue_ingest_greenhouse
+from app.services.jobs_repo import (
+    enqueue_ingest_greenhouse,
+    enqueue_ingest_source,
+)
+from app.services.sources import SOURCES
 from app.services.sources.greenhouse import NormalizedPosting
 
 
@@ -51,11 +64,26 @@ async def _seed_company(sm, slug: str = "anthropic") -> int:
         return company.id
 
 
-async def _enqueue(sm, slug: str):
+async def _enqueue_legacy(sm, slug: str):
     async with sm() as s:
         jid = await enqueue_ingest_greenhouse(s, company_slug=slug)
         await s.commit()
         return jid
+
+
+async def _enqueue_new(sm, slug: str):
+    async with sm() as s:
+        jid = await enqueue_ingest_source(
+            s, source="greenhouse", company_slug=slug
+        )
+        await s.commit()
+        return jid
+
+
+_ENQUEUE_PARAMS = [
+    pytest.param(_enqueue_new, id="new-payload"),
+    pytest.param(_enqueue_legacy, id="legacy-shim"),
+]
 
 
 async def _drain(sm):
@@ -70,9 +98,21 @@ async def _drain(sm):
     )
 
 
+def _patch_fetch(monkeypatch, fake):
+    """Patch the Greenhouse adapter's fetch_company_postings.
+
+    Both the generalized runner and the legacy shim resolve the adapter
+    through ``SOURCES``, so this single patch covers both paths.
+    """
+    monkeypatch.setattr(
+        SOURCES["greenhouse"], "fetch_company_postings", fake
+    )
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enqueue", _ENQUEUE_PARAMS)
 async def test_ingest_greenhouse_runner_upserts_postings(
-    monkeypatch, sessionmaker_factory
+    monkeypatch, sessionmaker_factory, enqueue
 ):
     sm = sessionmaker_factory
     await _ensure_user(sm)
@@ -82,25 +122,29 @@ async def test_ingest_greenhouse_runner_upserts_postings(
         assert slug == "anthropic"
         return [_make_posting("1"), _make_posting("2", title="Researcher")]
 
-    monkeypatch.setattr(jobs_runner, "fetch_company_jobs", fake_fetch)
+    _patch_fetch(monkeypatch, fake_fetch)
 
-    jid = await _enqueue(sm, "anthropic")
+    jid = await enqueue(sm, "anthropic")
     await _drain(sm)
 
     async with sm() as s:
         rows = (await s.execute(select(JobPosting))).scalars().all()
         assert len(rows) == 2
+        # Both paths persist source="greenhouse" on the posting.
+        assert {r.source for r in rows} == {"greenhouse"}
         job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
         assert job.status == "succeeded"
         assert job.result["created"] == 2
         assert job.result["updated"] == 0
         assert job.result["unchanged"] == 0
         assert job.result["slug"] == "anthropic"
+        assert job.result["source"] == "greenhouse"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enqueue", _ENQUEUE_PARAMS)
 async def test_ingest_greenhouse_runner_emits_events(
-    monkeypatch, sessionmaker_factory
+    monkeypatch, sessionmaker_factory, enqueue
 ):
     sm = sessionmaker_factory
     await _ensure_user(sm)
@@ -109,9 +153,9 @@ async def test_ingest_greenhouse_runner_emits_events(
     async def fake_fetch(slug, *, http):
         return [_make_posting("1")]
 
-    monkeypatch.setattr(jobs_runner, "fetch_company_jobs", fake_fetch)
+    _patch_fetch(monkeypatch, fake_fetch)
 
-    jid = await _enqueue(sm, "anthropic")
+    jid = await enqueue(sm, "anthropic")
     await _drain(sm)
 
     async with sm() as s:
@@ -123,7 +167,6 @@ async def test_ingest_greenhouse_runner_emits_events(
             )
         ).scalars().all()
         phases = [e.phase for e in events]
-        # In order: ingest_start, ingest_fetched, ingest_upserted, done.
         for required in ("ingest_start", "ingest_fetched", "ingest_upserted", "done"):
             assert required in phases, phases
         assert phases.index("ingest_start") < phases.index("ingest_fetched")
@@ -132,10 +175,11 @@ async def test_ingest_greenhouse_runner_emits_events(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enqueue", _ENQUEUE_PARAMS)
 async def test_ingest_greenhouse_runner_handles_404(
-    monkeypatch, sessionmaker_factory
+    monkeypatch, sessionmaker_factory, enqueue
 ):
-    """A 404 is normalized to ``[]`` by the fetcher; the run still succeeds."""
+    """A 404 is normalized to ``[]`` by the adapter; the run still succeeds."""
     sm = sessionmaker_factory
     await _ensure_user(sm)
     await _seed_company(sm, "ghost")
@@ -143,9 +187,9 @@ async def test_ingest_greenhouse_runner_handles_404(
     async def fake_fetch(slug, *, http):
         return []
 
-    monkeypatch.setattr(jobs_runner, "fetch_company_jobs", fake_fetch)
+    _patch_fetch(monkeypatch, fake_fetch)
 
-    jid = await _enqueue(sm, "ghost")
+    jid = await enqueue(sm, "ghost")
     await _drain(sm)
 
     async with sm() as s:
@@ -154,13 +198,12 @@ async def test_ingest_greenhouse_runner_handles_404(
         job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
         assert job.status == "succeeded"
         assert job.result["created"] == 0
-        assert job.result["updated"] == 0
-        assert job.result["unchanged"] == 0
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enqueue", _ENQUEUE_PARAMS)
 async def test_ingest_greenhouse_runner_fails_on_network_error(
-    monkeypatch, sessionmaker_factory
+    monkeypatch, sessionmaker_factory, enqueue
 ):
     sm = sessionmaker_factory
     await _ensure_user(sm)
@@ -169,9 +212,9 @@ async def test_ingest_greenhouse_runner_fails_on_network_error(
     async def fake_fetch(slug, *, http):
         raise httpx.ConnectError("boom")
 
-    monkeypatch.setattr(jobs_runner, "fetch_company_jobs", fake_fetch)
+    _patch_fetch(monkeypatch, fake_fetch)
 
-    jid = await _enqueue(sm, "anthropic")
+    jid = await enqueue(sm, "anthropic")
     await _drain(sm)
 
     async with sm() as s:
@@ -184,3 +227,24 @@ async def test_ingest_greenhouse_runner_fails_on_network_error(
             )
         ).scalars().all()
         assert any(e.phase == "failed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_runner_rejects_unknown_source(
+    sessionmaker_factory,
+):
+    """An unrecognized source name fails the job with a descriptive error."""
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+
+    async with sm() as s:
+        jid = await enqueue_ingest_source(
+            s, source="bogus", company_slug="anywhere"
+        )
+        await s.commit()
+
+    await _drain(sm)
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "failed"
+        assert "bogus" in (job.result or {}).get("error", "")

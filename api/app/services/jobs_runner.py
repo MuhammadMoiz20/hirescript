@@ -53,13 +53,19 @@ from app.models import (
     Profile as ProfileModel,
     Resume,
     ResumeVersion,
+    Tier,
 )
 from app.schemas.profile import Profile
-from app.services import answer_cache
+from app.services import answer_cache, notifications
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
-from app.services.jobs_repo import emit_event, enqueue_classify_posting
+from app.services.jobs_repo import (
+    count_submitted_today_for_tier,
+    emit_event,
+    enqueue_classify_posting,
+)
+from app.services.sources import SOURCES
 from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
@@ -67,6 +73,7 @@ from app.services.sources.greenhouse import (
 from app.services.submit_adapters import greenhouse as greenhouse_submit
 from app.services.tailor import tailor_resume
 from app.services.tailor_for_application import tailor_for_application
+from app.services import verify
 from app.services.versioning import snapshot_resume_version
 
 SessionFactory = Callable[[], AsyncSession]
@@ -313,18 +320,17 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             await hb
 
 
-async def run_ingest_greenhouse_job(
+async def run_ingest_source_job(
     sf: SessionFactory, job_id: uuid.UUID
 ) -> None:
-    """Fetch + upsert Greenhouse postings for ``payload['company_slug']``.
+    """Fetch + upsert postings for ``payload['source']`` + ``['company_slug']``.
 
-    Mirrors the heartbeat / terminal-status structure of
-    :func:`run_tailor_job`. On any unexpected exception, marks the job
-    ``failed`` and emits a ``failed`` event with the truncated error.
-
-    A 404 from Greenhouse is *not* an error — the fetcher returns an
-    empty list and we record a successful run with zero postings, so a
-    temporarily-broken board does not stall the scheduler.
+    Looks up the adapter in :data:`app.services.sources.SOURCES`. Mirrors
+    the heartbeat / terminal-status structure of :func:`run_tailor_job`.
+    A 404 from the upstream board is normalized to ``[]`` by the adapter,
+    so a temporarily-broken company board does not stall the scheduler.
+    Companies are looked up by ``(slug, source)`` so different ATS families
+    can share a slug (e.g. ``linear:greenhouse`` vs ``linear:ashby``).
     """
     hb = asyncio.create_task(_heartbeat(sf, job_id))
     try:
@@ -333,11 +339,18 @@ async def run_ingest_greenhouse_job(
                 await s.execute(select(Job).where(Job.id == job_id))
             ).scalar_one()
             payload: dict[str, Any] = job.payload or {}
+            source_name = payload["source"]
             slug = payload["company_slug"]
+
+            adapter = SOURCES.get(source_name)
+            if adapter is None:
+                raise ValueError(f"unknown source: {source_name!r}")
 
             company = (
                 await s.execute(
-                    select(Company).where(Company.slug == slug)
+                    select(Company).where(
+                        Company.slug == slug, Company.source == source_name
+                    )
                 )
             ).scalar_one_or_none()
             company_id = company.id if company else None
@@ -346,17 +359,21 @@ async def run_ingest_greenhouse_job(
             sf,
             job_id,
             phase="ingest_start",
-            message=f"Fetching {slug}",
-            data={"slug": slug},
+            message=f"Fetching {source_name}:{slug}",
+            data={"slug": slug, "source": source_name},
         )
         async with httpx.AsyncClient(timeout=30) as http:
-            postings = await fetch_company_jobs(slug, http=http)
+            postings = await adapter.fetch_company_postings(slug, http=http)
         await emit_event(
             sf,
             job_id,
             phase="ingest_fetched",
             message=f"Fetched {len(postings)} postings",
-            data={"count": len(postings), "slug": slug},
+            data={
+                "count": len(postings),
+                "slug": slug,
+                "source": source_name,
+            },
         )
 
         async with sf() as s:
@@ -364,7 +381,7 @@ async def run_ingest_greenhouse_job(
                 s,
                 user_id=1,
                 company_id=company_id,
-                source="greenhouse",
+                source=source_name,
                 postings=postings,
             )
 
@@ -404,7 +421,7 @@ async def run_ingest_greenhouse_job(
                 .values(
                     status="succeeded",
                     finished_at=datetime.now(timezone.utc),
-                    result={"slug": slug, **event_data},
+                    result={"slug": slug, "source": source_name, **event_data},
                 )
             )
             await s.commit()
@@ -412,6 +429,105 @@ async def run_ingest_greenhouse_job(
         try:
             await emit_event(
                 sf, job_id, phase="done", message=None, data=event_data
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
+
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": str(exc)[:500]},
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message=str(exc)[:500],
+                data={"error": str(exc)[:500]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
+
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
+async def run_ingest_greenhouse_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Backwards-compat shim — promotes the legacy payload to the new shape.
+
+    The legacy ``{"company_slug": ...}`` payload is rewritten in place to
+    ``{"source": "greenhouse", "company_slug": ...}`` so the generalized
+    runner can consume it. This shim is dropped in slice 5 once the
+    scheduler stops enqueuing the legacy kind.
+    """
+    async with sf() as s:
+        job = (
+            await s.execute(select(Job).where(Job.id == job_id))
+        ).scalar_one()
+        payload: dict[str, Any] = dict(job.payload or {})
+        if payload.get("source") != "greenhouse":
+            payload["source"] = "greenhouse"
+            await s.execute(
+                update(Job).where(Job.id == job_id).values(payload=payload)
+            )
+            await s.commit()
+    await run_ingest_source_job(sf, job_id)
+
+
+async def run_ingest_gmail_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Poll Gmail and ingest extracted postings.
+
+    Calls :func:`gmail_digest.poll_and_ingest` with ``user_id=1`` per
+    the single-tenant phase. Emits a ``progress`` event with the
+    created count and marks the job ``succeeded``. Any exception is
+    captured as a terminal ``failed`` event.
+    """
+    from app.services.sources import gmail_digest
+
+    hb = asyncio.create_task(_heartbeat(sf, job_id))
+    try:
+        async with sf() as s:
+            count = await gmail_digest.poll_and_ingest(s, user_id=1)
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="progress",
+            message=f"created={count}",
+            data={"created": int(count or 0)},
+        )
+
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"created": int(count or 0)},
+                )
+            )
+            await s.commit()
+
+        try:
+            await emit_event(
+                sf, job_id, phase="done", message=None, data={}
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
@@ -796,6 +912,54 @@ async def run_prepare_application_job(
             await s.commit()
             application_id = application.id
 
+        # Verify pass — judges grounding of tailored materials. Failure here
+        # MUST NOT block preparation; we leave verify_ok=None so the submit
+        # step can decide whether to gate on it. Submit (Batch C) treats
+        # None as "not verified, allow only B-mode".
+        try:
+            async with sf() as s:
+                verdict = await verify.verify_application(
+                    s, application_id=application_id
+                )
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(
+                        verify_ok=verdict["ok"],
+                        verify_issues=list(verdict["issues"]),
+                        verify_rationale=verdict["rationale"],
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="verified",
+                message=None,
+                data={
+                    "ok": verdict["ok"],
+                    "issue_count": len(verdict["issues"]),
+                },
+            )
+        except Exception:  # noqa: BLE001 — verify is advisory at prepare time
+            logger.exception(
+                "verify_application failed for application %s; "
+                "leaving verify_ok=None",
+                application_id,
+            )
+            try:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="verify_skipped",
+                    message="verifier raised; verify_ok left null",
+                    data={},
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "emit verify_skipped event failed for job %s", job_id
+                )
+
         async with sf() as s:
             await s.execute(
                 update(Job)
@@ -970,6 +1134,88 @@ def _truncate_confirmation(html: str) -> str:
     )
 
 
+_CAPTCHA_SCREENSHOT_DIR = "/app/compiled_pdfs/submit_screenshots"
+
+
+def _make_captcha_handler(
+    sf: SessionFactory, *, application_id: int
+) -> Callable[[dict[str, Any]], Awaitable[None]]:
+    """Build the ``on_captcha`` callback used during A-mode submits.
+
+    The callback persists the captcha screenshot to the same volume
+    B-mode uses for confirmation screenshots, flips the application row
+    to ``status='captcha_pause'``, and emits an in-app + ntfy
+    notification. The adapter then raises :class:`CaptchaPauseRequired`
+    which the runner catches without marking the job failed.
+    """
+
+    async def _handle(ctx: dict[str, Any]) -> None:
+        os.makedirs(_CAPTCHA_SCREENSHOT_DIR, exist_ok=True)
+        ts = int(datetime.now(timezone.utc).timestamp())
+        path = os.path.join(
+            _CAPTCHA_SCREENSHOT_DIR,
+            f"captcha_{application_id}_{ts}.png",
+        )
+        png = ctx.get("screenshot_png") or b""
+        try:
+            with open(path, "wb") as fh:
+                fh.write(png)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha screenshot write failed for application %s",
+                application_id,
+            )
+
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(
+                        status="captcha_pause",
+                        confirmation_screenshot_path=path,
+                    )
+                )
+                user_id_row = (
+                    await s.execute(
+                        select(Application.user_id).where(
+                            Application.id == application_id
+                        )
+                    )
+                ).scalar_one()
+                await s.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha-pause status update failed for application %s",
+                application_id,
+            )
+            user_id_row = 1
+
+        try:
+            async with sf() as s:
+                await notifications.send(
+                    s,
+                    user_id=int(user_id_row),
+                    kind="captcha_pause",
+                    title="Captcha required",
+                    body=(
+                        f"Application {application_id} paused on a "
+                        f"Greenhouse captcha at {ctx.get('url', '')}."
+                    ),
+                    meta={
+                        "application_id": application_id,
+                        "screenshot_path": path,
+                    },
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha-pause notification failed for application %s",
+                application_id,
+            )
+
+    return _handle
+
+
 async def run_submit_application_job(
     sf: SessionFactory, job_id: uuid.UUID
 ) -> None:
@@ -1068,6 +1314,133 @@ async def run_submit_application_job(
             resume_variant_id = app.resume_variant_id
             cover_letter_text = app.cover_letter_text or ""
             form_payload = dict(app.form_payload or {})
+            mode = app.mode
+            posting_tier = posting.tier
+            verify_ok = app.verify_ok
+
+            # --- A-mode policy gates ---------------------------------------
+            # Kill switch: refuse to drive the browser if the operator
+            # disabled autonomous submits. Application stays prepared.
+            if mode == "A" and (
+                os.environ.get("AUTONOMOUS_SUBMIT_DISABLED") == "1"
+            ):
+                await s.commit()
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="disabled",
+                    message="autonomous submit disabled",
+                    data={"application_id": application_id},
+                )
+                async with sf() as s2:
+                    await s2.execute(
+                        update(Job)
+                        .where(Job.id == job_id)
+                        .values(
+                            status="succeeded",
+                            finished_at=datetime.now(timezone.utc),
+                            result={
+                                "application_id": application_id,
+                                "skipped": True,
+                                "reason": "autonomous_submit_disabled",
+                            },
+                        )
+                    )
+                    await s2.commit()
+                return
+
+            # Cap check: re-load the Tier row so a live PATCH on
+            # ``tiers.daily_cap`` takes effect on the next worker tick. A
+            # cap of 0 disables A-mode for the tier.
+            if mode == "A":
+                tier_row: Tier | None = None
+                if posting_tier:
+                    tier_row = (
+                        await s.execute(
+                            select(Tier).where(Tier.slug == posting_tier)
+                        )
+                    ).scalar_one_or_none()
+                cap = tier_row.daily_cap if tier_row is not None else 0
+                if cap <= 0:
+                    today_count = 0
+                else:
+                    today_count = await count_submitted_today_for_tier(
+                        s, tier_slug=posting_tier or ""
+                    )
+                if cap <= 0 or today_count >= cap:
+                    await s.commit()
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="cap_hit",
+                        message="daily cap reached",
+                        data={
+                            "application_id": application_id,
+                            "tier": posting_tier,
+                            "cap": cap,
+                            "today_count": today_count,
+                        },
+                    )
+                    async with sf() as s2:
+                        await s2.execute(
+                            update(Job)
+                            .where(Job.id == job_id)
+                            .values(
+                                status="succeeded",
+                                finished_at=datetime.now(timezone.utc),
+                                result={
+                                    "application_id": application_id,
+                                    "skipped": True,
+                                    "reason": "cap_hit",
+                                    "tier": posting_tier,
+                                    "cap": cap,
+                                    "today_count": today_count,
+                                },
+                            )
+                        )
+                        await s2.commit()
+                    return
+
+                # Verify gate: A-mode refuses to submit unverified or
+                # explicitly-failing materials. Notification fires so the
+                # user can review in the in-app drawer.
+                if verify_ok is False:
+                    await s.commit()
+                    async with sf() as s2:
+                        await notifications.send(
+                            s2,
+                            user_id=app.user_id,
+                            kind="verify_blocked",
+                            title="A-mode submit blocked",
+                            body=(
+                                "Verifier flagged unsupported claims; "
+                                "review the application before submitting."
+                            ),
+                            meta={"application_id": application_id},
+                        )
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="verify_blocked",
+                        message="verify_ok is False",
+                        data={"application_id": application_id},
+                    )
+                    async with sf() as s2:
+                        await s2.execute(
+                            update(Job)
+                            .where(Job.id == job_id)
+                            .values(
+                                status="succeeded",
+                                finished_at=datetime.now(timezone.utc),
+                                result={
+                                    "application_id": application_id,
+                                    "skipped": True,
+                                    "reason": "verify_blocked",
+                                },
+                            )
+                        )
+                        await s2.commit()
+                    return
 
             app.status = "submitting"
             app.error = None
@@ -1112,8 +1485,16 @@ async def run_submit_application_job(
                     sf, job_id, phase=phase, message=None, data=data
                 )
 
+            on_captcha_cb = None
+            if mode == "A":
+                on_captcha_cb = _make_captcha_handler(
+                    sf, application_id=application_id
+                )
+
             result = await greenhouse_submit.submit(
-                ctx, on_progress=on_progress  # type: ignore[arg-type]
+                ctx,
+                on_progress=on_progress,  # type: ignore[arg-type]
+                on_captcha=on_captcha_cb,
             )
 
         # 5. Persist artifacts + flip terminal state.
@@ -1167,6 +1548,39 @@ async def run_submit_application_job(
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
+
+    except greenhouse_submit.CaptchaPauseRequired as exc:
+        # Captcha handler already persisted the screenshot + notification +
+        # set status='captcha_pause'. Mark the job succeeded-with-skip so
+        # the operator queue doesn't fill with spurious failed jobs.
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "skipped": True,
+                            "reason": "captcha_pause",
+                            "url": (exc.ctx or {}).get("url", ""),
+                        },
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="captcha_pause",
+                message="captcha challenge encountered",
+                data={"application_id": application_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal captcha-pause handler failed for job %s", job_id
+            )
 
     except greenhouse_submit.MissingFieldError as exc:
         await _fail_application(
@@ -1303,7 +1717,11 @@ async def _fail_application(
 # does not update what gets dispatched.
 RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "tailor": run_tailor_job,
+    "ingest_source": run_ingest_source_job,
+    # Slice-4 Batch A compat: scheduler still enqueues this kind until
+    # Batch B Task 8 teaches it to use ingest_source. Drop in slice 5.
     "ingest_greenhouse": run_ingest_greenhouse_job,
+    "ingest_gmail": run_ingest_gmail_job,
     "classify_posting": run_classify_posting_job,
     "prepare_application": run_prepare_application_job,
     "submit_application": run_submit_application_job,

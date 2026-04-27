@@ -187,7 +187,13 @@ async def test_ingest_runner_enqueues_classify_per_new_posting(
     async def fake_fetch(slug, *, http):
         return [_make_posting("1"), _make_posting("2", title="Researcher")]
 
-    monkeypatch.setattr(jobs_runner, "fetch_company_jobs", fake_fetch)
+    # Slice 4 Batch A: the runner now resolves the adapter via SOURCES,
+    # so we patch the adapter method instead of the legacy module-level fn.
+    from app.services.sources import SOURCES
+
+    monkeypatch.setattr(
+        SOURCES["greenhouse"], "fetch_company_postings", fake_fetch
+    )
 
     # Stub out the Haiku call so the spawned classify jobs succeed without
     # network. We don't care about the result here, only the enqueue count.
