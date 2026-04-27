@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
 from app.models import KbChunk, KbDocument
-from app.services.kb_sources import latex_master, markdown_folder
+from app.services.kb_sources import latex_master, markdown_folder, notion as notion_kb
 
 router = APIRouter(prefix="/kb", tags=["kb"])
 
-KNOWN_SOURCES = ["latex_master", "markdown"]
+KNOWN_SOURCES = ["latex_master", "markdown", "notion"]
 _MAX_LIMIT = 200
 
 
@@ -88,6 +88,14 @@ async def sync_source(
         await latex_master.ingest(user_id=user_id, db=db)
     elif source == "markdown":
         result = await markdown_folder.ingest(user_id=user_id, db=db)
+        extra = {
+            "created_or_updated": int(result.get("created_or_updated", 0)),
+            "deleted": int(result.get("deleted", 0)),
+        }
+    elif source == "notion":
+        result = await notion_kb.ingest(
+            user_id=user_id, db=db, page_ids=notion_kb.page_ids_from_env()
+        )
         extra = {
             "created_or_updated": int(result.get("created_or_updated", 0)),
             "deleted": int(result.get("deleted", 0)),

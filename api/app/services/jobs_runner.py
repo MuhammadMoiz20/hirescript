@@ -2155,3 +2155,53 @@ async def run_dream_research_job(
 
 
 RUNNERS["dream_research"] = run_dream_research_job
+
+
+# Slice-5 Task 13 — Notion KB sync. Walks the configured page ids
+# (from ``NOTION_PAGE_IDS`` env, comma-separated) and upserts each into
+# ``kb_documents`` under ``source="notion"``. Pages no longer in the
+# configured set are purged on the next sync.
+async def run_kb_sync_notion(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``kb_sync_notion`` job."""
+    from app.services.kb_sources import notion as notion_kb
+
+    await emit_event(sf, job_id, phase="kb_sync_start", message="notion", data={})
+    try:
+        async with sf() as s:
+            result = await notion_kb.ingest(
+                user_id=1, db=s, page_ids=notion_kb.page_ids_from_env()
+            )
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"source": "notion", **result},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="kb_sync_done", message="notion", data=result
+        )
+    except Exception as exc:  # noqa: BLE001
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"error": str(exc)[:500]},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="failed", message=str(exc)[:500], data={}
+        )
+
+
+RUNNERS["kb_sync_notion"] = run_kb_sync_notion

@@ -267,6 +267,38 @@ async def _enqueue_due_discovery(sf) -> None:
         await s.commit()
 
 
+_KB_SYNC_NOTION_INTERVAL_SEC = int(
+    os.environ.get("KB_SYNC_NOTION_INTERVAL_SEC", str(6 * 3600))
+)
+
+
+async def _enqueue_due_kb_notion(sf) -> None:
+    """Enqueue a ``kb_sync_notion`` job if token + page IDs are configured.
+
+    Drops the tick if any ``kb_sync_notion`` job is already queued or
+    running so we never stack syncs.
+    """
+    from app.services.kb_sources import notion as notion_kb
+
+    if not notion_kb.has_token():
+        return
+    if not notion_kb.page_ids_from_env():
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "kb_sync_notion",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="kb_sync_notion", status="queued", payload={}))
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
@@ -278,6 +310,7 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     loop.
     """
     last_gmail_tick = 0.0
+    last_kb_notion_tick = 0.0
     gmail_logged = False
     if not os.environ.get("GMAIL_USER"):
         log.info(
@@ -298,6 +331,14 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
             await _enqueue_due_discovery(sf)
         except Exception:
             log.exception("scheduler error (discover_companies)")
+
+        now = loop.time()
+        if (now - last_kb_notion_tick) >= _KB_SYNC_NOTION_INTERVAL_SEC:
+            try:
+                await _enqueue_due_kb_notion(sf)
+                last_kb_notion_tick = now
+            except Exception:
+                log.exception("scheduler error (kb_sync_notion)")
 
         if os.environ.get("GMAIL_USER"):
             now = loop.time()
