@@ -1,7 +1,7 @@
 import { diffLines } from "diff";
 import Button from "./ui/Button";
 import PageCountBadge from "./ui/PageCountBadge";
-import TermPill from "./ui/TermPill";
+import ProtectedTermPill from "./ui/ProtectedTermPill";
 import Glyph from "./ui/Glyph";
 
 interface Props {
@@ -161,7 +161,7 @@ export default function DiffView({
           </span>
           <Glyph name="warn" size={11} />
           {removedTerms.map((term) => (
-            <TermPill key={term} variant="removed">{term}</TermPill>
+            <ProtectedTermPill key={term} variant="removed">{term}</ProtectedTermPill>
           ))}
         </div>
       )}
