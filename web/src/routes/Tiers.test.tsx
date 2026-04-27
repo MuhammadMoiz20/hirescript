@@ -1,114 +1,203 @@
 /**
- * Tiers route tests — verify the read-only tier policy display.
+ * Tiers route tests — slice 3 wires this surface to the live `tiers` table.
  *
- * The view is intentionally inert: no API calls, no mutations, no draggable
- * handles. Tests assert the values match the canonical thresholds in
- * `api/app/services/classify.py` and that all interactive surfaces are
- * disabled.
+ * Each card is editable: daily_cap (blur), default_mode (toggle), tailor_model
+ * (select), enabled (toggle). PATCH fires per change with optimistic update +
+ * rollback on failure. The "Slice 3 will introduce…" banner and the readonly
+ * data-testid `tiers-readonly-banner` block are gone.
  */
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { render, screen, within, fireEvent, waitFor, act } from "@testing-library/react";
+import { beforeEach, afterEach, describe, expect, test, vi } from "vitest";
 import Tiers from "./Tiers";
+import type { TierPolicy } from "../api";
 
-describe("Tiers route", () => {
-  test("renders page header with eyebrow + serif title", () => {
-    render(<Tiers />);
-    expect(screen.getByText("Tiers")).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { level: 1, name: /classifier's verdict/i }),
-    ).toBeInTheDocument();
-  });
+function tier(over: Partial<TierPolicy> = {}): TierPolicy {
+  return {
+    slug: "targeted",
+    display_name: "Targeted",
+    min_fit_score: 65,
+    daily_cap: 20,
+    default_mode: "A",
+    tailor_model: "sonnet-4.6",
+    classify_model: "haiku-4.5",
+    enabled: true,
+    updated_at: "2026-04-26T12:00:00Z",
+    ...over,
+  };
+}
 
-  test("surfaces a read-only banner pointing at the Slice 3 backend gap", () => {
-    render(<Tiers />);
-    const banner = screen.getByTestId("tiers-readonly-banner");
-    expect(banner).toHaveTextContent(/coming in slice 3/i);
-    expect(banner).toHaveTextContent(/api\/app\/services\/classify\.py/);
-  });
+const FOUR_TIERS: TierPolicy[] = [
+  tier({ slug: "dream",    display_name: "Dream",    min_fit_score: 85, daily_cap: 999, default_mode: "B", tailor_model: "opus-4.7" }),
+  tier({ slug: "targeted", display_name: "Targeted", min_fit_score: 65, daily_cap: 20,  default_mode: "A", tailor_model: "sonnet-4.6" }),
+  tier({ slug: "wide_net", display_name: "Wide net", min_fit_score: 40, daily_cap: 50,  default_mode: "A", tailor_model: "sonnet-4.6" }),
+  tier({ slug: "skip",     display_name: "Skip",     min_fit_score: 0,  daily_cap: 0,   default_mode: "B", tailor_model: "haiku-4.5" }),
+];
 
-  test("renders threshold ribbon with one segment per tier (no drag handles)", () => {
-    render(<Tiers />);
-    const ribbon = screen.getByTestId("tiers-ribbon");
-    expect(ribbon).toBeInTheDocument();
-    for (const id of ["dream", "targeted", "wide", "skip"] as const) {
-      expect(within(ribbon).getByTestId(`ribbon-seg-${id}`)).toBeInTheDocument();
+const realFetch = global.fetch;
+
+function mockTiers(rows: TierPolicy[]) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/api/tiers") && (!init || !init.method || init.method === "GET")) {
+      return new Response(JSON.stringify(rows), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
-    // Boundary markers exist at the canonical thresholds.
-    for (const v of [40, 60, 85]) {
-      const mark = within(ribbon).getByTestId(`ribbon-mark-${v}`);
-      expect(mark).toBeInTheDocument();
-      // No `cursor: ew-resize` — the bundle's draggable affordance is removed.
-      expect(mark.getAttribute("style") || "").not.toMatch(/ew-resize/);
+    if (/\/api\/tiers\/[^/]+$/.test(url) && init?.method === "PATCH") {
+      const slug = url.split("/").pop()!;
+      const patch = JSON.parse((init.body as string) || "{}");
+      const existing = rows.find((r) => r.slug === slug)!;
+      const updated = { ...existing, ...patch, updated_at: new Date().toISOString() };
+      return new Response(JSON.stringify(updated), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
+    throw new Error(`Unmocked fetch: ${init?.method || "GET"} ${url}`);
+  });
+  global.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+afterEach(() => {
+  global.fetch = realFetch;
+});
+
+describe("Tiers route — wired to backend", () => {
+  test("renders header without the slice-3 readonly banner", async () => {
+    mockTiers(FOUR_TIERS);
+    render(<Tiers />);
+    await screen.findByTestId("tier-card-dream");
+    expect(screen.queryByTestId("tiers-readonly-banner")).not.toBeInTheDocument();
+    expect(screen.queryByText(/coming in slice 3/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/slice 3 will introduce/i)).not.toBeInTheDocument();
   });
 
-  test("renders all four tier cards with the correct fit-score ranges", () => {
+  test("fetches /api/tiers on mount and renders all four cards", async () => {
+    const fetchMock = mockTiers(FOUR_TIERS);
     render(<Tiers />);
-    const expected = [
-      { id: "dream", range: "85–100" },
-      { id: "targeted", range: "60–84" },
-      { id: "wide", range: "40–59" },
-      { id: "skip", range: "0–39" },
-    ];
-    for (const { id, range } of expected) {
-      const card = screen.getByTestId(`tier-card-${id}`);
-      expect(card).toBeInTheDocument();
-      expect(within(card).getByText(`fit ${range}`)).toBeInTheDocument();
+    for (const t of FOUR_TIERS) {
+      const card = await screen.findByTestId(`tier-card-${t.slug}`);
+      expect(within(card).getByText(new RegExp(`min fit score:\\s*${t.min_fit_score}`, "i"))).toBeInTheDocument();
     }
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/tiers$/),
+      expect.objectContaining({ credentials: "include" }),
+    );
   });
 
-  test("each tier card shows a per-stage model breakdown (Classify/Research/Tailor/Cover)", () => {
+  test("editing daily_cap PATCHes the tier on blur", async () => {
+    const fetchMock = mockTiers(FOUR_TIERS);
     render(<Tiers />);
-    for (const id of ["dream", "targeted", "wide", "skip"] as const) {
-      const block = screen.getByTestId(`tier-card-${id}-models`);
-      expect(within(block).getByText(/^Classify$/i)).toBeInTheDocument();
-      expect(within(block).getByText(/^Research$/i)).toBeInTheDocument();
-      expect(within(block).getByText(/^Tailor$/i)).toBeInTheDocument();
-      expect(within(block).getByText(/^Cover$/i)).toBeInTheDocument();
-    }
+    const card = await screen.findByTestId("tier-card-targeted");
+    const cap = within(card).getByLabelText(/daily cap/i) as HTMLInputElement;
+    fireEvent.change(cap, { target: { value: "30" } });
+    fireEvent.blur(cap);
+    await waitFor(() => {
+      const patches = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patches.length).toBe(1);
+      const [url, init] = patches[0];
+      expect(String(url)).toMatch(/\/api\/tiers\/targeted$/);
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ daily_cap: 30 });
+    });
   });
 
-  test("ModeToggle in every tier card is disabled (read-only indicator)", () => {
+  test("daily_cap=0 shows 'A-mode disabled' hint", async () => {
+    mockTiers(FOUR_TIERS);
     render(<Tiers />);
-    for (const id of ["dream", "targeted", "wide", "skip"] as const) {
-      const card = screen.getByTestId(`tier-card-${id}`);
-      const toggle = within(card).getByRole("group", { name: /mode toggle/i });
-      expect(toggle).toHaveAttribute("data-disabled", "true");
-      // Both A/B buttons should be disabled.
-      const buttons = within(toggle).getAllByRole("button");
-      expect(buttons.length).toBeGreaterThanOrEqual(2);
-      for (const b of buttons) {
-        expect(b).toBeDisabled();
+    const card = await screen.findByTestId("tier-card-skip");
+    expect(within(card).getByText(/a-mode disabled/i)).toBeInTheDocument();
+  });
+
+  test("toggling enabled PATCHes immediately", async () => {
+    const fetchMock = mockTiers(FOUR_TIERS);
+    render(<Tiers />);
+    const card = await screen.findByTestId("tier-card-targeted");
+    const enabled = within(card).getByLabelText(/^enabled$/i) as HTMLInputElement;
+    fireEvent.click(enabled);
+    await waitFor(() => {
+      const patches = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patches.length).toBe(1);
+      expect(JSON.parse((patches[0][1] as RequestInit).body as string)).toEqual({ enabled: false });
+    });
+  });
+
+  test("PATCH 422 rolls back the optimistic value and shows an inline error", async () => {
+    let calls = 0;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls++;
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/tiers") && (!init || !init.method || init.method === "GET")) {
+        return new Response(JSON.stringify(FOUR_TIERS), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
-    }
+      if (init?.method === "PATCH") {
+        return new Response(JSON.stringify({ detail: "invalid daily_cap" }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error("Unmocked");
+    }) as unknown as typeof fetch;
+
+    render(<Tiers />);
+    const card = await screen.findByTestId("tier-card-targeted");
+    const cap = within(card).getByLabelText(/daily cap/i) as HTMLInputElement;
+    expect(cap.value).toBe("20");
+    fireEvent.change(cap, { target: { value: "999999" } });
+    fireEvent.blur(cap);
+    await waitFor(() => {
+      expect(within(card).getByRole("alert")).toHaveTextContent(/invalid daily_cap/i);
+    });
+    // Rolled back to original value.
+    expect(cap.value).toBe("20");
+    expect(calls).toBeGreaterThanOrEqual(2);
   });
 
-  test("verifier strictness reflects backend tier rules (strict/lenient/n/a)", () => {
+  test("renders an empty state when the backend returns no tiers", async () => {
+    mockTiers([]);
     render(<Tiers />);
-    expect(screen.getByTestId("tier-card-dream-verifier")).toHaveTextContent("strict");
-    expect(screen.getByTestId("tier-card-targeted-verifier")).toHaveTextContent("strict");
-    expect(screen.getByTestId("tier-card-wide-verifier")).toHaveTextContent("lenient");
-    expect(screen.getByTestId("tier-card-skip-verifier")).toHaveTextContent("n/a");
+    await waitFor(() =>
+      expect(screen.getByTestId("tiers-empty")).toBeInTheDocument(),
+    );
   });
 
-  test("global override knobs render as placeholders, not editable inputs", () => {
+  test("shows updated_at when present", async () => {
+    mockTiers([
+      tier({ slug: "targeted", updated_at: "2026-04-26T12:34:56Z" }),
+    ]);
     render(<Tiers />);
-    expect(screen.getByTestId("tiers-placeholder-mode-floor")).toBeInTheDocument();
-    expect(screen.getByTestId("tiers-placeholder-daily-mass-cap")).toBeInTheDocument();
-    expect(
-      screen.getByTestId("tiers-placeholder-spending-kill-switch"),
-    ).toBeInTheDocument();
-    // No <input> or <button type="submit"> escapes — view is fully inert.
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /save/i }),
-    ).not.toBeInTheDocument();
+    const card = await screen.findByTestId("tier-card-targeted");
+    expect(within(card).getByText(/updated/i)).toBeInTheDocument();
   });
 
-  test("footer notes Slice 3 will add edit + persist", () => {
+  test("changing tailor_model PATCHes with the new value", async () => {
+    const fetchMock = mockTiers(FOUR_TIERS);
     render(<Tiers />);
-    expect(
-      screen.getByText(/slice 3 will introduce a/i),
-    ).toBeInTheDocument();
+    const card = await screen.findByTestId("tier-card-targeted");
+    const select = within(card).getByLabelText(/tailor model/i) as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "opus-4.7" } });
+    });
+    await waitFor(() => {
+      const patches = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patches.length).toBe(1);
+      expect(JSON.parse((patches[0][1] as RequestInit).body as string)).toEqual({
+        tailor_model: "opus-4.7",
+      });
+    });
   });
 });

@@ -11,7 +11,43 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   return ct.includes("application/json") ? res.json() : (res.blob() as unknown as T);
 }
 
-export type Tier = "haiku" | "sonnet" | "opus";
+/** Model tier — used by the chat editor to pick a Claude model. */
+export type ModelTier = "haiku" | "sonnet" | "opus";
+// Backwards-compat alias for older callers (ChatSidebar). The new "Tier"
+// type below is the policy object (slice 3) — distinct concept.
+export type Tier = ModelTier;
+
+/** Tier policy row — mirrors `api/app/schemas/tier.py::TierOut`. */
+export type TierPolicy = {
+  slug: string;
+  display_name: string;
+  min_fit_score: number;
+  daily_cap: number;
+  default_mode: "A" | "B";
+  tailor_model: "sonnet-4.6" | "opus-4.7" | "haiku-4.5";
+  classify_model: string;
+  enabled: boolean;
+  updated_at: string | null;
+};
+
+export type TierUpdate = Partial<
+  Pick<TierPolicy, "daily_cap" | "default_mode" | "tailor_model" | "enabled">
+>;
+
+export async function listTiers(): Promise<TierPolicy[]> {
+  const res = await fetch(`${BASE}/tiers`, { credentials: "include" });
+  return jsonOrThrow<TierPolicy[]>(res);
+}
+
+export async function updateTier(slug: string, patch: TierUpdate): Promise<TierPolicy> {
+  const res = await fetch(`${BASE}/tiers/${slug}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return jsonOrThrow<TierPolicy>(res);
+}
 
 export type EditResult = {
   /** Null when the agent's reply was conversational and not an actual edit. */
@@ -671,6 +707,12 @@ export type Application = {
   form_payload: Record<string, unknown> | null;
   submitted_at: string | null;
   error: string | null;
+  /** Slice 3: verifier verdict — null until the verify pass runs. */
+  verify_ok: boolean | null;
+  /** Slice 3: per-claim issues raised by the verifier. */
+  verify_issues: string[];
+  /** Slice 3: short rationale from the verifier. */
+  verify_rationale: string | null;
 };
 
 export type ApplicationDetail = Application & {
@@ -710,6 +752,22 @@ export async function submitApplication(id: number): Promise<{ job_id: string }>
   return jsonOrThrow<{ job_id: string }>(res);
 }
 
+export async function promoteToA(id: number): Promise<Application> {
+  const res = await fetch(`${BASE}/applications/${id}/promote_to_A`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<Application>(res);
+}
+
+export async function pauseA(id: number): Promise<Application> {
+  const res = await fetch(`${BASE}/applications/${id}/pause_A`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<Application>(res);
+}
+
 export async function deleteApplication(id: number): Promise<void> {
   const res = await fetch(`${BASE}/applications/${id}`, {
     method: "DELETE",
@@ -731,7 +789,11 @@ export const api = {
   listApplications,
   getApplication,
   submitApplication,
+  promoteToA,
+  pauseA,
   deleteApplication,
+  listTiers,
+  updateTier,
   getKbSources,
   syncKbSource,
   getKbDocuments,
