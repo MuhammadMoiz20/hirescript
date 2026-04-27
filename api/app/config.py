@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     database_url: str
 
     storage_endpoint_url: str = "http://minio:9000"
+    storage_public_url: str | None = None
     storage_access_key: str = "minio"
     storage_secret_key: str = "minio12345"
     storage_bucket: str = "hirescript-pdfs"

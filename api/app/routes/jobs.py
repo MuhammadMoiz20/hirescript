@@ -21,7 +21,7 @@ from app.services.jobs_repo import cancel_job
 _TERMINAL_PHASES = ("done", "failed", "cancelled")
 _POLL_INTERVAL_SECONDS = 0.5
 
-router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.post("/tailor", response_model=EnqueueTailorOut)

@@ -47,7 +47,16 @@ def get_pdf(*, key: str, bucket: str | None = None) -> bytes:
 
 def presign_get(*, key: str, ttl_seconds: int = 600, bucket: str | None = None) -> str:
     bucket = bucket or settings.storage_bucket
-    return _client().generate_presigned_url(
+    public_endpoint = settings.storage_public_url or settings.storage_endpoint_url
+    signer = boto3.client(
+        "s3",
+        endpoint_url=public_endpoint,
+        aws_access_key_id=settings.storage_access_key,
+        aws_secret_access_key=settings.storage_secret_key,
+        region_name=settings.storage_region,
+        config=Config(signature_version="s3v4"),
+    )
+    return signer.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=ttl_seconds,

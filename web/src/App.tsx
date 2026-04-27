@@ -419,7 +419,7 @@ function SuiteShell({
   return (
     <div
       data-component="suite-shell"
-      style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}
+      style={{ height: "100vh", display: "flex", flexDirection: "column" }}
     >
       <TopBar
         breadcrumb={breadcrumb}

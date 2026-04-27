@@ -39,6 +39,7 @@ services:
       - pdfs:/app/compiled_pdfs
       - ./kb:/app/kb
       - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
     depends_on:
       db:
         condition: service_healthy
@@ -56,6 +57,7 @@ services:
       - ./api:/app
       - pdfs:/app/compiled_pdfs
       - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
     depends_on:
       db:
         condition: service_healthy
