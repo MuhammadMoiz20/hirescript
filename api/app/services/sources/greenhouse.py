@@ -283,7 +283,43 @@ class GreenhouseSource:
         *,
         http: httpx.AsyncClient,
     ) -> CoverLetterRequirement:
-        return CoverLetterRequirement.UNKNOWN
+        slug = posting_meta.get("slug") or self._slug_from_url_safe(apply_url)
+        job_id = self._job_id_from_url(apply_url)
+        if not slug or not job_id:
+            return CoverLetterRequirement.UNKNOWN
+        url = f"{GREENHOUSE_BASE_URL}/{slug}/jobs/{job_id}"
+        try:
+            resp = await http.get(url, params={"questions": "true"}, timeout=10.0)
+            if resp.status_code != 200:
+                return CoverLetterRequirement.UNKNOWN
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return CoverLetterRequirement.UNKNOWN
+        return _classify_questions(data.get("questions") or [])
+
+    def _slug_from_url_safe(self, url: str) -> str | None:
+        try:
+            return self.slug_from_url(url)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _job_id_from_url(url: str) -> str | None:
+        m = re.search(r"/jobs/(\d+)", url)
+        return m.group(1) if m else None
+
+
+def _classify_questions(questions: list[dict]) -> CoverLetterRequirement:
+    for q in questions:
+        label = (q.get("label") or "").lower()
+        if "cover letter" not in label:
+            continue
+        return (
+            CoverLetterRequirement.REQUIRED
+            if q.get("required")
+            else CoverLetterRequirement.OPTIONAL
+        )
+    return CoverLetterRequirement.NOT_PRESENT
 
 
 # Module-level instance — the registry imports this name.
