@@ -8,6 +8,7 @@ import Inbox from "./routes/Inbox";
 import Queue from "./routes/Queue";
 import { Jobs } from "./routes/Jobs";
 import Overview from "./routes/Overview";
+import HistoryMassApply from "./routes/HistoryMassApply";
 import TopBar from "./components/suite/TopBar";
 import NavRail, { type NavKey } from "./components/suite/NavRail";
 import CommandPalette, { type CommandItem } from "./components/suite/CommandPalette";
@@ -258,7 +259,7 @@ function StateApp() {
   ) : view === "settings" ? (
     <PlaceholderPane title="Settings" />
   ) : view === "history-massapply" ? (
-    <PlaceholderPane title="Mass-apply history" />
+    <HistoryMassApply onBack={goOverview} />
   ) : (
     <Overview />
   );
