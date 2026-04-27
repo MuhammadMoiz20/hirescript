@@ -43,10 +43,10 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const bp = useBreakpoint();
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("edit");
-  // Desktop chat rail is open by default to mirror the bundle's editor; user
-  // can collapse it to a 36px vertical strip to claim the width back for the
-  // PDF preview.
-  const [desktopChatOpen, setDesktopChatOpen] = useState(true);
+  // Desktop chat rail starts collapsed (36px strip) so the editor + PDF
+  // preview get the full width — the open state was crowding the layout into
+  // four narrow columns. Users can expand it on demand from the side strip.
+  const [desktopChatOpen, setDesktopChatOpen] = useState(false);
   const [compiledAt, setCompiledAt] = useState<number | null>(null);
 
   useEffect(() => {

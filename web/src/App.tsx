@@ -40,7 +40,9 @@ export type View =
   | "tiers"
   | "settings"
   | "companies"
-  | "history-massapply";
+  | "history-massapply"
+  | "tailor"
+  | "history-perjob";
 
 /** Map current View → NavKey for highlighting NavRail. `null` = no highlight. */
 function viewToNavKey(view: View): NavKey | null {
@@ -71,6 +73,10 @@ function viewToNavKey(view: View): NavKey | null {
       return "settings";
     case "history-massapply":
       return "history-massapply";
+    case "tailor":
+      return "tailor";
+    case "history-perjob":
+      return "history-perjob";
     case "jobs":
       // Jobs lives at /jobs route — no nav rail highlight.
       return null;
@@ -104,6 +110,10 @@ function viewToBreadcrumb(view: View): { section: string; route?: string } {
       return { section: "Settings", route: "Companies" };
     case "history-massapply":
       return { section: "Mass-apply", route: "History" };
+    case "tailor":
+      return { section: "Per-job", route: "Tailor" };
+    case "history-perjob":
+      return { section: "Per-job", route: "History" };
     case "jobs":
       return { section: "Suite", route: "Jobs" };
     default:
@@ -152,11 +162,16 @@ function StateApp() {
           if (editorOpen) setView("editor");
           return;
         case "tailor":
-        case "jds":
-        case "history-perjob":
-          // TODO: Phase D — wire when those surfaces split out of Editor.
           setOpenId(null);
-          setView("list");
+          setView("tailor");
+          return;
+        case "jds":
+          setOpenId(null);
+          navigate("/jobs");
+          return;
+        case "history-perjob":
+          setOpenId(null);
+          setView("history-perjob");
           return;
         case "inbox":
           setView("inbox");
@@ -181,7 +196,7 @@ function StateApp() {
           return;
       }
     },
-    [editorOpen],
+    [editorOpen, navigate],
   );
 
   // CommandPalette items — Navigation + Actions for now. Recent / Active
@@ -245,6 +260,20 @@ function StateApp() {
     <Overview />
   ) : view === "list" ? (
     <ResumeList onOpen={(id) => { setOpenId(id); setView("list"); }} />
+  ) : view === "tailor" ? (
+    <PerJobPlaceholder
+      title="Tailor a resume"
+      body="Pick a master resume from the Library, then use Tailor to generate a job-specific variant."
+      ctaLabel="Open Library"
+      onCta={goList}
+    />
+  ) : view === "history-perjob" ? (
+    <PerJobPlaceholder
+      title="Per-job history"
+      body="Per-job version history lives inside the Editor. Open a resume from the Library to review and roll back changes."
+      ctaLabel="Open Library"
+      onCta={goList}
+    />
   ) : view === "knowledge" ? (
     <Knowledge onBack={goList} tab={knowledgeTab} onTabChange={setKnowledgeTab} />
   ) : view === "inbox" ? (
@@ -446,6 +475,61 @@ function SuiteShell({
           {children}
         </main>
       </div>
+    </div>
+  );
+}
+
+function PerJobPlaceholder({
+  title,
+  body,
+  ctaLabel,
+  onCta,
+}: {
+  title: string;
+  body: string;
+  ctaLabel: string;
+  onCta: () => void;
+}) {
+  return (
+    <div style={{ padding: "48px 24px", maxWidth: 560, margin: "0 auto" }}>
+      <h1
+        style={{
+          fontFamily: "var(--f-sans)",
+          fontSize: 22,
+          fontWeight: 600,
+          color: "var(--ink)",
+          margin: "0 0 12px",
+        }}
+      >
+        {title}
+      </h1>
+      <p
+        style={{
+          fontFamily: "var(--f-sans)",
+          fontSize: 14,
+          color: "var(--ink-2)",
+          lineHeight: 1.55,
+          margin: "0 0 20px",
+        }}
+      >
+        {body}
+      </p>
+      <button
+        type="button"
+        onClick={onCta}
+        style={{
+          fontFamily: "var(--f-sans)",
+          fontSize: 13,
+          padding: "8px 14px",
+          background: "var(--ink)",
+          color: "var(--paper)",
+          border: "1px solid var(--ink)",
+          borderRadius: 3,
+          cursor: "pointer",
+        }}
+      >
+        {ctaLabel}
+      </button>
     </div>
   );
 }
