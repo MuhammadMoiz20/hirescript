@@ -5,6 +5,7 @@ import { beforeEach, vi } from "vitest";
 const mockApi = vi.hoisted(() => ({
   getProfile: vi.fn(),
   putProfile: vi.fn(),
+  streamOnboarding: vi.fn(),
 }));
 
 vi.mock("../../api", () => ({ api: mockApi }));
@@ -55,6 +56,22 @@ test("editing a field and clicking Save calls putProfile with the new payload", 
   const arg = mockApi.putProfile.mock.calls[0][0];
   expect(arg.legal_name).toBe("New Name");
   expect(arg.email).toBe("user@example.com");
+});
+
+test("docks the onboarding chat panel collapsed by default and toggles open", async () => {
+  render(<ProfileTab />);
+  // Wait for the form to load so the docked panel is rendered alongside it.
+  await screen.findByDisplayValue("Existing");
+  // Collapsed handle is visible; full chat (Send button + message input) is not.
+  expect(screen.getByLabelText(/open onboarding chat/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/^message$/i)).not.toBeInTheDocument();
+  // Open the chat
+  fireEvent.click(screen.getByLabelText(/open onboarding chat/i));
+  expect(screen.getByLabelText(/^message$/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/collapse onboarding chat/i)).toBeInTheDocument();
+  // Collapse again
+  fireEvent.click(screen.getByLabelText(/collapse onboarding chat/i));
+  expect(screen.queryByLabelText(/^message$/i)).not.toBeInTheDocument();
 });
 
 test("server 422 with field error renders an inline error", async () => {

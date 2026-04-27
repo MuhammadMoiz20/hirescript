@@ -9,6 +9,7 @@ import {
   WorkMode,
 } from "../../api";
 import Button from "../ui/Button";
+import OnboardingChatPanel from "./OnboardingChatPanel";
 
 type FieldErrors = Record<string, string>;
 
@@ -303,6 +304,9 @@ export default function ProfileTab() {
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [genericError, setGenericError] = useState<string | null>(null);
+  // Onboarding chat is docked on the right; collapsed by default so the
+  // profile editor gets the full width until the user opens it.
+  const [chatCollapsed, setChatCollapsed] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -375,7 +379,11 @@ export default function ProfileTab() {
   }
 
   return (
-    <div style={{ maxWidth: 860, margin: "0 auto", padding: "clamp(16px, 3vw, 24px)" }}>
+    <div
+      data-part="profile-tab-row"
+      style={{ display: "flex", alignItems: "stretch", minHeight: 0 }}
+    >
+      <div style={{ flex: 1, minWidth: 0, maxWidth: 860, margin: "0 auto", padding: "clamp(16px, 3vw, 24px)" }}>
       <div
         style={{
           display: "flex",
@@ -915,6 +923,11 @@ export default function ProfileTab() {
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>
+      </div>
+      <OnboardingChatPanel
+        collapsed={chatCollapsed}
+        onToggleCollapsed={() => setChatCollapsed((c) => !c)}
+      />
     </div>
   );
 }

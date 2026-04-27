@@ -4,7 +4,6 @@ import Login from "./routes/Login";
 import ResumeList from "./routes/ResumeList";
 import Editor from "./routes/Editor";
 import Knowledge, { type KnowledgeTab } from "./routes/Knowledge";
-import OnboardingChat from "./routes/OnboardingChat";
 import Inbox from "./routes/Inbox";
 import Queue from "./routes/Queue";
 import { Jobs } from "./routes/Jobs";
@@ -28,7 +27,6 @@ export type View =
   | "knowledge"
   | "inbox"
   | "applications"
-  | "onboarding"
   | "jobs"
   | "dashboard"
   | "tiers"
@@ -45,9 +43,9 @@ function viewToNavKey(view: View): NavKey | null {
     case "editor":
       return "editor";
     case "knowledge":
-    case "onboarding":
-      // Phase C collapsed Profile into Knowledge tabs (T14). Onboarding
-      // still routes here until T15 relocates it as a side panel.
+      // Phase C collapsed Profile into Knowledge tabs (T14). T15 relocated
+      // the onboarding chat as a docked side-panel inside Profile, so it no
+      // longer needs a top-level View.
       return "knowledge";
     case "inbox":
       return "inbox";
@@ -80,8 +78,6 @@ function viewToBreadcrumb(view: View): { section: string; route?: string } {
       return { section: "Per-job", route: "Editor" };
     case "knowledge":
       return { section: "Knowledge", route: "Knowledge" };
-    case "onboarding":
-      return { section: "Knowledge", route: "Onboarding" };
     case "inbox":
       return { section: "Mass-apply", route: "Inbox" };
     case "applications":
@@ -251,8 +247,6 @@ function StateApp() {
     <ResumeList onOpen={(id) => { setOpenId(id); setView("list"); }} />
   ) : view === "knowledge" ? (
     <Knowledge onBack={goList} tab={knowledgeTab} onTabChange={setKnowledgeTab} />
-  ) : view === "onboarding" ? (
-    <OnboardingChat onBack={goList} />
   ) : view === "inbox" ? (
     <Inbox onBack={goList} />
   ) : view === "applications" ? (
