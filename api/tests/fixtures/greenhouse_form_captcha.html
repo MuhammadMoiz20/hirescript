@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply</title></head>
+<body>
+<form id="application_form" action="/submitted" method="post" enctype="multipart/form-data">
+  <label for="first_name">First name</label>
+  <input id="first_name" name="first_name" />
+
+  <label for="last_name">Last name</label>
+  <input id="last_name" name="last_name" />
+
+  <label for="email">Email</label>
+  <input id="email" type="email" name="email" />
+
+  <label for="phone">Phone</label>
+  <input id="phone" name="phone" />
+
+  <label for="resume">Resume</label>
+  <input id="resume" type="file" name="resume" />
+
+  <label for="cover_letter">Cover letter</label>
+  <textarea id="cover_letter" name="cover_letter"></textarea>
+
+  <button type="submit">Submit application</button>
+</form>
+<script>
+  const form = document.getElementById('application_form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    // Simulate the post-submit captcha challenge.
+    const wrap = document.createElement('div');
+    wrap.innerHTML =
+      '<h2>Please verify you are human</h2>' +
+      '<iframe src="https://www.google.com/recaptcha/api.html" ' +
+      'title="reCAPTCHA challenge" width="300" height="200"></iframe>';
+    document.body.appendChild(wrap);
+  });
+</script>
+</body>
+</html>
