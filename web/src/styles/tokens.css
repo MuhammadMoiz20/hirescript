@@ -39,6 +39,11 @@
   --f-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --f-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
 
+  /* Aliases — plan-spec naming. Keep --f-* (bundle authoritative) intact. */
+  --font-serif: var(--f-serif);
+  --font-sans: var(--f-sans);
+  --font-mono: var(--f-mono);
+
   /* Scale */
   --s-0: 4px;
   --s-1: 8px;
@@ -145,6 +150,15 @@ input:-webkit-autofill:focus {
 }
 
 a { color: inherit; text-decoration: none; }
+
+/* Typographic defaults — serif headings, mono for code-ish elements */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--f-serif);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--f-mono);
+}
 
 /* Utility: hairline border */
 .rule { border: 1px solid var(--rule); }
