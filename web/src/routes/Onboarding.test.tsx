@@ -61,6 +61,25 @@ test("PDF mode calls onboardPdf", async () => {
   await waitFor(() => expect(api.onboardPdf).toHaveBeenCalled());
 });
 
+test("renders eyebrow + serif page title and breadcrumb back to library", () => {
+  const onCancel = vi.fn();
+  render(<Onboarding onCancel={onCancel} onCreated={() => {}} />);
+  // Eyebrow + page title
+  expect(screen.getByText(/onboarding/i)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: /start a new resume/i })).toBeInTheDocument();
+  // Back-to-library breadcrumb wired to onCancel
+  fireEvent.click(screen.getByTestId("onboarding-back"));
+  expect(onCancel).toHaveBeenCalled();
+});
+
+test("hides the form panel until a source is picked", () => {
+  render(<Onboarding onCancel={() => {}} onCreated={() => {}} />);
+  // Resume name field is part of the conditional details panel
+  expect(screen.queryByLabelText(/resume name/i)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /start from scratch/i }));
+  expect(screen.getByLabelText(/resume name/i)).toBeInTheDocument();
+});
+
 test("warns when imported resume overflows", async () => {
   const { api } = await import("../api");
   (api.onboardTex as any).mockResolvedValueOnce({
