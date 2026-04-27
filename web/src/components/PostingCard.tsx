@@ -1,50 +1,105 @@
+/**
+ * PostingCard — Inbox row component.
+ *
+ * Refactored from a card to a table-like row matching the design bundle's
+ * `JobRow` (ma-screens-1.jsx). Columns: company/role, tier, fit, status,
+ * source, ingested, inline actions. Uses the mass-apply primitives
+ * (TierBadge, FitChip, StatusPill, ModeToggle).
+ *
+ * Public API kept minimal and consistent with the previous card: callers
+ * pass a Posting plus open/prepare/skip handlers and a `preparing` flag.
+ * Inbox is the only consumer (verified with grep).
+ */
+
 import { Posting } from "../api";
 import Button from "./ui/Button";
+import TierBadge, { Tier } from "./ui/TierBadge";
+import FitChip from "./ui/FitChip";
+import StatusPill, { StatusKind } from "./ui/StatusPill";
+import ModeToggle from "./ui/ModeToggle";
 
 interface Props {
   posting: Posting;
+  selected?: boolean;
   onClick: (id: number) => void;
   onPrepare: (id: number) => void;
   onSkip?: (id: number) => void;
   preparing?: boolean;
 }
 
-const TIER_COLORS: Record<string, { bg: string; fg: string; label: string }> = {
-  dream: { bg: "color-mix(in oklch, var(--accent) 20%, var(--paper))", fg: "var(--ink)", label: "Dream" },
-  targeted: { bg: "color-mix(in oklch, #2563eb 18%, var(--paper))", fg: "var(--ink)", label: "Targeted" },
-  wide_net: { bg: "var(--paper-2)", fg: "var(--ink-2)", label: "Wide net" },
-  skip: { bg: "var(--paper-2)", fg: "var(--ink-3)", label: "Skip" },
-};
-
-function fitScoreColor(score: number | null): string {
-  if (score == null) return "var(--ink-3)";
-  if (score >= 80) return "#16a34a";
-  if (score >= 60) return "#2563eb";
-  if (score >= 40) return "#92400e";
-  return "var(--ink-3)";
+// Backend tier strings → TierBadge kinds. Backend uses `wide_net`; primitive
+// uses `wide`. Anything else (null, unknown) renders no badge.
+function mapTier(value: string | null): Tier | null {
+  switch (value) {
+    case "dream": return "dream";
+    case "targeted": return "targeted";
+    case "wide_net": return "wide";
+    case "skip": return "skip";
+    default: return null;
+  }
 }
 
-function daysAgo(iso: string): string {
+// Backend posting.status strings → StatusPill kinds. The pill primitive only
+// covers a fixed set; statuses outside it render as a plain mono label so we
+// don't fake a pill state. Mapping intentionally narrow — extend when the
+// backend grows new states.
+function mapStatus(value: string): StatusKind | null {
+  switch (value) {
+    case "preparing": return "running";
+    case "prepared": return "prepared";
+    case "ready": return "prepared";
+    case "submitted": return "submitted";
+    case "skipped": return "cancelled";
+    case "duplicate_skipped": return "duplicate_skipped";
+    case "failed": return "failed";
+    case "errored": return "errored";
+    case "stuck": return "stuck";
+    case "paused": return "paused";
+    case "queued": return "queued";
+    default: return null; // ingested, classified, anything novel
+  }
+}
+
+function fmtAgo(iso: string): string {
   const d = new Date(iso);
   const ms = Date.now() - d.getTime();
-  const days = Math.floor(ms / 86_400_000);
-  if (days < 1) return "today";
-  if (days === 1) return "1d ago";
-  if (days < 30) return `${days}d ago`;
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d`;
   const months = Math.floor(days / 30);
-  return `${months}mo ago`;
+  return `${months}mo`;
 }
 
-export default function PostingCard({ posting, onClick, onPrepare, onSkip, preparing }: Props) {
-  const tierMeta = posting.tier ? TIER_COLORS[posting.tier] : null;
-  const score = posting.fit_score;
+// Grid template aligned with the column header in Inbox.tsx. Keep these in
+// sync — both files declare the same columns.
+export const POSTING_ROW_COLUMNS =
+  "minmax(220px, 1.6fr) 110px 80px 130px 110px 70px minmax(180px, auto)";
+
+export default function PostingCard({
+  posting,
+  selected,
+  onClick,
+  onPrepare,
+  onSkip,
+  preparing,
+}: Props) {
+  const tier = mapTier(posting.tier);
+  const statusKind = mapStatus(posting.status);
+  const isPreparing = preparing || posting.status === "preparing";
+  const isPrepared = posting.status === "prepared" || posting.status === "ready";
 
   return (
     <div
       role="button"
       tabIndex={0}
-      data-testid="posting-card"
+      data-testid="posting-row"
       data-posting-id={posting.id}
+      data-selected={selected ? "true" : "false"}
+      aria-pressed={selected}
       onClick={() => onClick(posting.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -54,88 +109,120 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
       }}
       style={{
         display: "grid",
-        gridTemplateColumns: "auto auto 1fr auto auto",
+        gridTemplateColumns: POSTING_ROW_COLUMNS,
         alignItems: "center",
         gap: 12,
-        padding: "10px 14px",
+        padding: "10px 16px",
         borderBottom: "1px solid var(--rule)",
-        background: "var(--paper)",
+        background: selected ? "var(--paper-2)" : "var(--paper)",
         cursor: "pointer",
-        minHeight: 56,
+        minHeight: 52,
+        outline: "none",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-2)")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "var(--paper)")}
+      onMouseEnter={(e) => {
+        if (!selected) e.currentTarget.style.background = "var(--paper-2)";
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) e.currentTarget.style.background = "var(--paper)";
+      }}
     >
-      {/* Tier badge */}
-      <span
-        aria-label={tierMeta ? `Tier: ${tierMeta.label}` : "No tier"}
-        style={{
-          fontSize: 10.5,
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
-          padding: "3px 7px",
-          borderRadius: 3,
-          fontWeight: 600,
-          background: tierMeta ? tierMeta.bg : "var(--paper-2)",
-          color: tierMeta ? tierMeta.fg : "var(--ink-3)",
-          border: "1px solid var(--rule)",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {tierMeta ? tierMeta.label : "—"}
-      </span>
-
-      {/* Fit score chip */}
-      <span
-        aria-label={score != null ? `Fit score ${score}` : "No fit score"}
-        className="mono"
-        style={{
-          fontSize: 11,
-          padding: "3px 6px",
-          borderRadius: 3,
-          border: "1px solid var(--rule)",
-          color: fitScoreColor(score),
-          minWidth: 32,
-          textAlign: "center",
-        }}
-      >
-        {score != null ? score : "—"}
-      </span>
-
-      {/* Company + title + meta */}
+      {/* Company / Role — primary key/value */}
       <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
-          <span style={{ fontWeight: 600, fontSize: 13.5, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {posting.company || "Unknown"}
-          </span>
-          <span style={{ color: "var(--ink-3)" }}>·</span>
-          <span style={{ fontSize: 13, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {posting.title}
-          </span>
+        <div style={{
+          fontWeight: 500,
+          fontSize: 13,
+          color: "var(--ink)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}>
+          {posting.company || "Unknown company"}
         </div>
-        <div style={{ fontSize: 11.5, color: "var(--ink-3)", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {posting.location && <span>{posting.location}</span>}
-          <span className="mono" style={{ textTransform: "lowercase" }}>{posting.source}</span>
-          <span
-            aria-label="Apply mode B (read-only)"
-            style={{
-              fontSize: 10.5,
-              padding: "1px 5px",
-              borderRadius: 2,
-              border: "1px solid var(--rule)",
-              color: "var(--ink-3)",
-            }}
-          >
-            B
-          </span>
-          <span>{daysAgo(posting.ingested_at)}</span>
-          <span style={{ color: "var(--ink-3)" }}>· {posting.status}</span>
+        <div style={{
+          fontSize: 11.5,
+          color: "var(--ink-3)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          fontFamily: "var(--f-mono)",
+        }}>
+          {posting.title}
+          {posting.location ? ` · ${posting.location}` : ""}
         </div>
       </div>
 
-      {/* Actions */}
-      <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6 }}>
-        {onSkip && posting.status !== "skip" && (
+      {/* Tier */}
+      <div>
+        {tier ? (
+          <TierBadge tier={tier} />
+        ) : (
+          <span className="mono" style={{ fontSize: 10, color: "var(--ink-4)" }}>—</span>
+        )}
+      </div>
+
+      {/* Fit */}
+      <div>
+        <FitChip score={posting.fit_score} />
+      </div>
+
+      {/* Status */}
+      <div>
+        {statusKind ? (
+          <StatusPill status={statusKind} />
+        ) : (
+          <span
+            className="mono"
+            data-testid="posting-status-fallback"
+            style={{
+              fontSize: 10,
+              padding: "1px 7px",
+              borderRadius: 999,
+              border: "1px solid var(--rule)",
+              color: "var(--ink-3)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {posting.status}
+          </span>
+        )}
+      </div>
+
+      {/* Source + mode (read-only B-mode placeholder until backend exposes mode) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          className="mono"
+          style={{
+            fontSize: 11,
+            color: "var(--ink-3)",
+            textTransform: "lowercase",
+          }}
+        >
+          {posting.source}
+        </span>
+        <ModeToggle mode="B" disabled />
+      </div>
+
+      {/* Ingested */}
+      <div
+        className="mono"
+        style={{
+          fontSize: 11,
+          color: "var(--ink-3)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+        title={posting.ingested_at}
+      >
+        {fmtAgo(posting.ingested_at)}
+      </div>
+
+      {/* Inline actions */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}
+      >
+        {onSkip && posting.status !== "skipped" && posting.status !== "skip" && (
           <Button size="sm" variant="ghost" onClick={() => onSkip(posting.id)}>
             Skip
           </Button>
@@ -144,15 +231,12 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
           size="sm"
           variant="primary"
           data-testid="posting-prepare-btn"
-          disabled={preparing || posting.status === "preparing" || posting.status === "ready"}
+          disabled={isPreparing || isPrepared}
           onClick={() => onPrepare(posting.id)}
         >
-          {preparing ? "Preparing…" : "Prepare application"}
+          {isPreparing ? "Preparing…" : isPrepared ? "Prepared" : "Prepare"}
         </Button>
       </div>
-
-      {/* Spacer overflow */}
-      <span aria-hidden style={{ width: 4 }} />
     </div>
   );
 }
