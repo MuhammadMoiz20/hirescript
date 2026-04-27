@@ -30,6 +30,8 @@ import { api } from "../api";
 
 interface Props {
   onBack?: () => void;
+  /** Slice 4: navigate to the Companies admin sub-page. */
+  onOpenCompanies?: () => void;
 }
 
 /** localStorage key for the user-supplied Anthropic API key. */
@@ -50,7 +52,8 @@ const STAGE_DEFAULTS: { stage: string; model: ModelName; note: string }[] = [
   { stage: "Cover letter", model: "sonnet", note: "balanced" },
 ];
 
-export default function Settings(_props: Props = {}) {
+export default function Settings(props: Props = {}) {
+  const { onOpenCompanies } = props;
   // Workspace — derived from the browser at mount time. These read-only
   // values are intentionally not persisted; they reflect the live env.
   const timezone = useMemo(() => {
@@ -82,6 +85,7 @@ export default function Settings(_props: Props = {}) {
       />
 
       <WorkspaceSection timezone={timezone} locale={locale} />
+      <CompaniesSection onOpen={onOpenCompanies} />
       <ApiKeySection />
       <ModelDefaultsSection />
       <ExportsSection />
@@ -281,6 +285,44 @@ function WorkspaceSection({ timezone, locale }: { timezone: string; locale: stri
           </Field>
         </Card>
       </div>
+    </Section>
+  );
+}
+
+/* ─── Companies ────────────────────────────────────────────────────────── */
+
+function CompaniesSection({ onOpen }: { onOpen?: () => void }) {
+  return (
+    <Section
+      title="Companies"
+      sub="Source allowlist — companies the scheduler polls every tick."
+      testId="settings-companies"
+    >
+      <Card>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
+            Add or remove Greenhouse / Lever / Ashby / Workable companies. Each
+            row toggles ingest on or off.
+          </div>
+          <button
+            type="button"
+            data-testid="settings-companies-open"
+            onClick={onOpen}
+            disabled={!onOpen}
+            style={btnStyle("default", !onOpen)}
+          >
+            Manage companies →
+          </button>
+        </div>
+      </Card>
     </Section>
   );
 }

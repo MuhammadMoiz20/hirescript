@@ -632,6 +632,65 @@ export async function cancelJob(id: string): Promise<void> {
   if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
 }
 
+// ── Companies (sources admin) ──────────────────────────────────────────────
+
+export type CompanySource = "greenhouse" | "lever" | "ashby" | "workable";
+
+export type Company = {
+  id: number;
+  source: CompanySource;
+  slug: string;
+  display_name: string;
+  enabled: boolean;
+  created_at: string;
+};
+
+export type CompanyCreate = {
+  source: CompanySource;
+  slug: string;
+  display_name: string;
+};
+
+export async function listCompanies(source?: CompanySource): Promise<Company[]> {
+  const qs = source ? `?source=${encodeURIComponent(source)}` : "";
+  const res = await fetch(`${BASE}/companies${qs}`, { credentials: "include" });
+  return jsonOrThrow<Company[]>(res);
+}
+
+export async function createCompany(body: CompanyCreate): Promise<Company> {
+  const res = await fetch(`${BASE}/companies`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<Company>(res);
+}
+
+export async function updateCompany(
+  id: number,
+  patch: { display_name?: string; enabled?: boolean },
+): Promise<Company> {
+  const res = await fetch(`${BASE}/companies/${id}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return jsonOrThrow<Company>(res);
+}
+
+export async function deleteCompany(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/companies/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = null; }
+  throw { status: res.status, detail } as ApiError;
+}
+
 // ── Postings (Inbox) ───────────────────────────────────────────────────────
 
 export type Posting = {
@@ -659,12 +718,14 @@ export type PostingDetail = Posting & {
 export async function listPostings(params: {
   status?: string;
   tier?: string;
+  source?: string;
   limit?: number;
   offset?: number;
 } = {}): Promise<{ items: Posting[]; total: number }> {
   const qs = new URLSearchParams();
   if (params.status) qs.set("status", params.status);
   if (params.tier) qs.set("tier", params.tier);
+  if (params.source) qs.set("source", params.source);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
   const query = qs.toString();
@@ -685,6 +746,16 @@ export async function preparePosting(id: number): Promise<{ job_id: string; batc
     credentials: "include",
   });
   return jsonOrThrow<{ job_id: string; batch_id: string }>(res);
+}
+
+export async function pasteJobUrl(url: string): Promise<Posting> {
+  const res = await fetch(`${BASE}/postings/from_url`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  return jsonOrThrow<Posting>(res);
 }
 
 export async function skipPosting(id: number): Promise<{ posting_id: number; status: string }> {
@@ -794,6 +865,11 @@ export const api = {
   deleteApplication,
   listTiers,
   updateTier,
+  listCompanies,
+  createCompany,
+  updateCompany,
+  deleteCompany,
+  pasteJobUrl,
   getKbSources,
   syncKbSource,
   getKbDocuments,

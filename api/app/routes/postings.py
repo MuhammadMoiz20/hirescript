@@ -86,6 +86,7 @@ async def _load_posting_for_user(
 async def list_postings(
     status: str | None = None,
     tier: str | None = None,
+    source: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user_id: int = Depends(require_user),
@@ -97,6 +98,8 @@ async def list_postings(
         base = base.where(JobPosting.status == status)
     if tier is not None:
         base = base.where(JobPosting.tier == tier)
+    if source is not None:
+        base = base.where(JobPosting.source == source)
 
     total = (
         await db.execute(select(func.count()).select_from(base.subquery()))
