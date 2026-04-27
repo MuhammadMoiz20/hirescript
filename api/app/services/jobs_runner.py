@@ -488,6 +488,81 @@ async def run_ingest_greenhouse_job(
     await run_ingest_source_job(sf, job_id)
 
 
+async def run_ingest_gmail_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Poll Gmail and ingest extracted postings.
+
+    Calls :func:`gmail_digest.poll_and_ingest` with ``user_id=1`` per
+    the single-tenant phase. Emits a ``progress`` event with the
+    created count and marks the job ``succeeded``. Any exception is
+    captured as a terminal ``failed`` event.
+    """
+    from app.services.sources import gmail_digest
+
+    hb = asyncio.create_task(_heartbeat(sf, job_id))
+    try:
+        async with sf() as s:
+            count = await gmail_digest.poll_and_ingest(s, user_id=1)
+
+        await emit_event(
+            sf,
+            job_id,
+            phase="progress",
+            message=f"created={count}",
+            data={"created": int(count or 0)},
+        )
+
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"created": int(count or 0)},
+                )
+            )
+            await s.commit()
+
+        try:
+            await emit_event(
+                sf, job_id, phase="done", message=None, data={}
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
+
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": str(exc)[:500]},
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message=str(exc)[:500],
+                data={"error": str(exc)[:500]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
+
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
 async def run_classify_posting_job(
     sf: SessionFactory, job_id: uuid.UUID
 ) -> None:
@@ -1646,6 +1721,7 @@ RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     # Slice-4 Batch A compat: scheduler still enqueues this kind until
     # Batch B Task 8 teaches it to use ingest_source. Drop in slice 5.
     "ingest_greenhouse": run_ingest_greenhouse_job,
+    "ingest_gmail": run_ingest_gmail_job,
     "classify_posting": run_classify_posting_job,
     "prepare_application": run_prepare_application_job,
     "submit_application": run_submit_application_job,

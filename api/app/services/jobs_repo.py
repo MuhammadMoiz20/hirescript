@@ -177,6 +177,26 @@ async def enqueue_ingest_greenhouse(
     return job_id
 
 
+async def enqueue_ingest_gmail(db: AsyncSession) -> uuid.UUID:
+    """Insert a queued ``ingest_gmail`` job (single-tenant, no params).
+
+    Caller owns the transaction (we only ``flush``); returns the new
+    job id. The runner reads ``user_id=1`` directly per the
+    single-tenant phase.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="ingest_gmail",
+            status="queued",
+            payload={},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def enqueue_classify_posting(
     db: AsyncSession, *, posting_id: int
 ) -> uuid.UUID:

@@ -482,6 +482,58 @@ async def test_scheduler_amode_kill_switch_skips_branch(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_enqueues_one_ingest_gmail_per_tick(
+    monkeypatch, sessionmaker_factory
+):
+    """With GMAIL_USER set, a single tick enqueues one ingest_gmail
+    job; a second tick must dedup against the still-queued job."""
+    from app.worker import _enqueue_due_gmail
+
+    monkeypatch.setenv("GMAIL_USER", "me@example.com")
+
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert len(jobs) == 1
+        assert jobs[0].status == "queued"
+
+    # Second tick: the still-queued job suppresses a second enqueue.
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert len(jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_gmail_when_env_unset(
+    monkeypatch, sessionmaker_factory
+):
+    from app.worker import _enqueue_due_gmail
+
+    monkeypatch.delenv("GMAIL_USER", raising=False)
+
+    await _enqueue_due_gmail(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_gmail")
+            )
+        ).scalars().all()
+        assert jobs == []
+
+
+@pytest.mark.asyncio
 async def test_scheduler_skips_companies_with_in_flight_ingest(
     sessionmaker_factory,
 ):

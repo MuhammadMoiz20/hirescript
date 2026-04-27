@@ -21,6 +21,7 @@ from app.services import jobs_runner
 from app.services.jobs_repo import (
     claim_one,
     count_submitted_today_for_tier,
+    enqueue_ingest_gmail,
     enqueue_ingest_source,
     enqueue_submit_application,
     reclaim_stale_jobs,
@@ -34,6 +35,9 @@ log = logging.getLogger("worker")
 
 POLL_SEC = 1.0
 INGEST_INTERVAL_SEC = int(os.environ.get("INGEST_INTERVAL_SEC", "900"))
+GMAIL_POLL_INTERVAL_SEC = int(
+    os.environ.get("GMAIL_POLL_INTERVAL_SEC", "1800")
+)
 
 
 async def _dispatch(sf, job, sem: asyncio.Semaphore) -> None:
@@ -213,13 +217,48 @@ async def _enqueue_due_amode_submits(sf) -> None:
         await s.commit()
 
 
+async def _enqueue_due_gmail(sf) -> None:
+    """Enqueue an ``ingest_gmail`` job if none currently queued/running.
+
+    Skips entirely (silently) when ``GMAIL_USER`` is unset — the
+    digest source is opt-in via env. Single-tenant, so there's only
+    ever one in-flight gmail poll.
+    """
+    if not os.environ.get("GMAIL_USER"):
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "ingest_gmail",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        await enqueue_ingest_gmail(s)
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
-    """Periodically enqueue ingest_greenhouse + autonomous submit jobs.
+    """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
     Runs once on entry, then every ``INGEST_INTERVAL_SEC`` seconds until
-    ``shutdown`` is set. Errors in either branch are logged but do not stop
-    the loop.
+    ``shutdown`` is set. The gmail tick respects its own
+    ``GMAIL_POLL_INTERVAL_SEC`` cadence by only running when the
+    elapsed wall time since the last gmail enqueue exceeds the
+    interval. Errors in any branch are logged but do not stop the
+    loop.
     """
+    last_gmail_tick = 0.0
+    gmail_logged = False
+    if not os.environ.get("GMAIL_USER"):
+        log.info(
+            "scheduler: GMAIL_USER unset — skipping gmail digest polls"
+        )
+        gmail_logged = True
+    loop = asyncio.get_event_loop()
     while not shutdown.is_set():
         try:
             await _enqueue_due_ingests(sf)
@@ -229,6 +268,21 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
             await _enqueue_due_amode_submits(sf)
         except Exception:
             log.exception("scheduler error (a-mode submits)")
+
+        if os.environ.get("GMAIL_USER"):
+            now = loop.time()
+            if (now - last_gmail_tick) >= GMAIL_POLL_INTERVAL_SEC:
+                try:
+                    await _enqueue_due_gmail(sf)
+                    last_gmail_tick = now
+                except Exception:
+                    log.exception("scheduler error (gmail)")
+        elif not gmail_logged:
+            log.info(
+                "scheduler: GMAIL_USER unset — skipping gmail digest polls"
+            )
+            gmail_logged = True
+
         try:
             await asyncio.wait_for(
                 shutdown.wait(), timeout=INGEST_INTERVAL_SEC
