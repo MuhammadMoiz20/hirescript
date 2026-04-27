@@ -16,11 +16,13 @@ import uuid
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Company, Job
+from app.models import Application, Company, Job, JobPosting, Tier
 from app.services import jobs_runner
 from app.services.jobs_repo import (
     claim_one,
+    count_submitted_today_for_tier,
     enqueue_ingest_greenhouse,
+    enqueue_submit_application,
     reclaim_stale_jobs,
 )
 from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
@@ -140,17 +142,99 @@ async def _enqueue_due_ingests(sf) -> None:
         await s.commit()
 
 
+async def _enqueue_due_amode_submits(sf) -> None:
+    """Enqueue ``submit_application`` jobs for prepared A-mode applications
+    whose tier still has cap headroom today.
+
+    Skips applications that already have a queued/running
+    ``submit_application`` job — mirrors the dedup pattern used by
+    :func:`_enqueue_due_ingests`. Honors the
+    ``AUTONOMOUS_SUBMIT_DISABLED=1`` kill switch by short-circuiting the
+    entire branch.
+    """
+    if os.environ.get("AUTONOMOUS_SUBMIT_DISABLED") == "1":
+        return
+
+    async with sf() as s:
+        # Pull the prepared A-mode applications + their posting tier.
+        prepared = (
+            await s.execute(
+                select(Application, JobPosting.tier)
+                .join(JobPosting, JobPosting.id == Application.posting_id)
+                .where(
+                    Application.status == "prepared",
+                    Application.mode == "A",
+                )
+                .order_by(Application.prepared_at)
+            )
+        ).all()
+
+        if not prepared:
+            return
+
+        # Look up tier policies in one shot.
+        tier_slugs = {t for _, t in prepared if t}
+        tier_rows = (
+            await s.execute(select(Tier).where(Tier.slug.in_(tier_slugs)))
+        ).scalars().all() if tier_slugs else []
+        tier_caps = {t.slug: t.daily_cap for t in tier_rows}
+
+        # Already-inflight submit jobs to dedup against.
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "submit_application",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        inflight_app_ids = {
+            (j.payload or {}).get("application_id") for j in inflight
+        }
+
+        # Track per-tier remaining headroom so we don't enqueue more than
+        # the cap allows on a single tick.
+        remaining: dict[str, int] = {}
+        for slug in tier_slugs:
+            cap = tier_caps.get(slug, 0) or 0
+            if cap <= 0:
+                remaining[slug] = 0
+            else:
+                today = await count_submitted_today_for_tier(
+                    s, tier_slug=slug
+                )
+                remaining[slug] = max(0, cap - today)
+
+        for app, tier_slug in prepared:
+            if not tier_slug:
+                continue
+            if remaining.get(tier_slug, 0) <= 0:
+                continue
+            if app.id in inflight_app_ids:
+                continue
+            await enqueue_submit_application(s, application_id=app.id)
+            remaining[tier_slug] -= 1
+            inflight_app_ids.add(app.id)
+
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
-    """Periodically enqueue ingest_greenhouse jobs.
+    """Periodically enqueue ingest_greenhouse + autonomous submit jobs.
 
     Runs once on entry, then every ``INGEST_INTERVAL_SEC`` seconds until
-    ``shutdown`` is set. Errors are logged but do not stop the loop.
+    ``shutdown`` is set. Errors in either branch are logged but do not stop
+    the loop.
     """
     while not shutdown.is_set():
         try:
             await _enqueue_due_ingests(sf)
         except Exception:
-            log.exception("scheduler error")
+            log.exception("scheduler error (ingest)")
+        try:
+            await _enqueue_due_amode_submits(sf)
+        except Exception:
+            log.exception("scheduler error (a-mode submits)")
         try:
             await asyncio.wait_for(
                 shutdown.wait(), timeout=INGEST_INTERVAL_SEC
