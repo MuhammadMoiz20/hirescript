@@ -74,6 +74,7 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
   const [submittingId, setSubmittingId] = useState<number | null>(null);
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [resumingAId, setResumingAId] = useState<number | null>(null);
+  const [confirmingAgentId, setConfirmingAgentId] = useState<number | null>(null);
   const [modeFilter, setModeFilter] = useState<"all" | "A" | "B">("all");
   const [verifyFilter, setVerifyFilter] = useState<"all" | "blocked">("all");
 
@@ -117,6 +118,24 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
       setError(e?.detail ? String(e.detail) : e?.message || "Resume failed");
     } finally {
       setResumingAId(null);
+    }
+  }
+
+  async function handleConfirmAgent(id: number) {
+    setConfirmingAgentId(id);
+    try {
+      const res = await api.confirmAgentSubmit(id);
+      setItems((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? { ...a, status: res.status, submitted_at: res.submitted_at }
+            : a,
+        ),
+      );
+    } catch (e: any) {
+      setError(e?.detail ? String(e.detail) : e?.message || "Confirm failed");
+    } finally {
+      setConfirmingAgentId(null);
     }
   }
 
@@ -325,9 +344,11 @@ export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
             onCancel={handleCancel}
             onResumeA={handleResumeA}
             onEditAndRetry={handleEditAndRetry}
+            onConfirmAgent={handleConfirmAgent}
             submittingId={submittingId}
             cancellingId={cancellingId}
             resumingAId={resumingAId}
+            confirmingAgentId={confirmingAgentId}
           />
         ))}
       </div>
@@ -343,9 +364,11 @@ interface LaneProps {
   onCancel: (id: number) => void;
   onResumeA: (id: number) => void;
   onEditAndRetry: (id: number) => void;
+  onConfirmAgent: (id: number) => void;
   submittingId: number | null;
   cancellingId: number | null;
   resumingAId: number | null;
+  confirmingAgentId: number | null;
 }
 
 function Lane({
@@ -356,9 +379,11 @@ function Lane({
   onCancel,
   onResumeA,
   onEditAndRetry,
+  onConfirmAgent,
   submittingId,
   cancellingId,
   resumingAId,
+  confirmingAgentId,
 }: LaneProps) {
   const futureLane = spec.id === "applying" || spec.id === "paused";
   const emptyText = futureLane && apps.length === 0
@@ -470,9 +495,11 @@ function Lane({
               onCancel={onCancel}
               onResumeA={onResumeA}
               onEditAndRetry={onEditAndRetry}
+              onConfirmAgent={onConfirmAgent}
               submitting={submittingId === app.id}
               cancelling={cancellingId === app.id}
               resumingA={resumingAId === app.id}
+              confirmingAgent={confirmingAgentId === app.id}
             />
           ))
         )}
