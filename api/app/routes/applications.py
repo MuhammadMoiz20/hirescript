@@ -77,6 +77,11 @@ async def _serialize_application(
         "status": app.status,
         "mode": app.mode,
         "cover_letter_text": app.cover_letter_text,
+        "cover_letter_requirement": (
+            ((posting.meta or {}).get("cover_letter") or {}).get(
+                "requirement", "unknown"
+            )
+        ),
         "form_payload": app.form_payload,
         "submitted_at": app.submitted_at,
         "error": app.error,

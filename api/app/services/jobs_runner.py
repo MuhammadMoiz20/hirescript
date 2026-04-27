@@ -63,6 +63,7 @@ from app.services.agents import dream_research as agent_dream
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
+from app.services.cover_letter_probe import resolve_cover_letter_requirement
 from app.services.jobs_repo import (
     count_submitted_today_for_tier,
     emit_event,
@@ -842,18 +843,37 @@ async def run_prepare_application_job(
             },
         )
 
-        # 3. Cover letter (read-only — no commit needed).
+        # 3. Cover letter — only generated when the posting form has a CL field.
         async with sf() as s:
-            cover_letter_text = await generate_cover_letter(
-                s, user_id=1, posting_id=posting_id
+            posting_row = await s.get(JobPosting, posting_id)
+            cl_requirement = await resolve_cover_letter_requirement(
+                s, posting_row
             )
-        await emit_event(
-            sf,
-            job_id,
-            phase="cover_letter_generated",
-            message=None,
-            data={"length": len(cover_letter_text)},
-        )
+
+        if cl_requirement.should_generate():
+            async with sf() as s:
+                cover_letter_text = await generate_cover_letter(
+                    s, user_id=1, posting_id=posting_id
+                )
+            await emit_event(
+                sf,
+                job_id,
+                phase="cover_letter_generated",
+                message=None,
+                data={
+                    "length": len(cover_letter_text),
+                    "requirement": cl_requirement.value,
+                },
+            )
+        else:
+            cover_letter_text = ""
+            await emit_event(
+                sf,
+                job_id,
+                phase="cover_letter_skipped",
+                message="form has no cover letter field",
+                data={"requirement": cl_requirement.value},
+            )
 
         # 4. Build form_payload (touches answer_cache — flush only).
         async with sf() as s:

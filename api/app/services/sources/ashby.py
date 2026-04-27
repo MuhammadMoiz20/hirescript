@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "AshbySource",
@@ -30,6 +30,21 @@ __all__ = [
 
 
 ASHBY_BASE_URL = "https://api.ashbyhq.com/posting-api/job-board"
+ASHBY_GRAPHQL_URL = (
+    "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting"
+)
+_ASHBY_CL_QUERY = """
+    query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) {
+      jobPosting(
+        organizationHostedJobsPageName: $organizationHostedJobsPageName
+        jobPostingId: $jobPostingId
+      ) {
+        applicationFormDefinition {
+          sections { fields { path isRequired } }
+        }
+      }
+    }
+"""
 
 
 # Recognized URL family:
@@ -137,6 +152,53 @@ class AshbySource:
         raise ValueError(
             f"ashby posting id {posting_id!r} not found on board {slug!r}"
         )
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        parsed = _parse_ashby_url(apply_url)
+        if parsed is None:
+            return CoverLetterRequirement.UNKNOWN
+        slug, posting_id = parsed
+        try:
+            resp = await http.post(
+                ASHBY_GRAPHQL_URL,
+                json={
+                    "operationName": "ApiJobPosting",
+                    "variables": {
+                        "organizationHostedJobsPageName": slug,
+                        "jobPostingId": posting_id,
+                    },
+                    "query": _ASHBY_CL_QUERY,
+                },
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return CoverLetterRequirement.UNKNOWN
+            payload = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return CoverLetterRequirement.UNKNOWN
+        if payload.get("errors"):
+            return CoverLetterRequirement.UNKNOWN
+        sections = (
+            (((payload.get("data") or {}).get("jobPosting") or {})
+             .get("applicationFormDefinition") or {})
+            .get("sections") or []
+        )
+        for section in sections:
+            for field in section.get("fields") or []:
+                path = (field.get("path") or "").lower()
+                if "cover_letter" in path or "coverletter" in path:
+                    return (
+                        CoverLetterRequirement.REQUIRED
+                        if field.get("isRequired")
+                        else CoverLetterRequirement.OPTIONAL
+                    )
+        return CoverLetterRequirement.NOT_PRESENT
 
 
 ashby_source = AshbySource()

@@ -12,11 +12,15 @@ from app.services.sources.greenhouse import greenhouse_source
 from app.services.sources.indeed import indeed_source
 from app.services.sources.lever import lever_source
 from app.services.sources.linkedin import linkedin_source
-from app.services.sources.protocol import NormalizedPosting, Source
+from app.services.sources.protocol import (
+    CoverLetterRequirement,
+    NormalizedPosting,
+    Source,
+)
 from app.services.sources.wellfound import wellfound_source
 from app.services.sources.workable import workable_source
 
-__all__ = ["NormalizedPosting", "SOURCES", "Source"]
+__all__ = ["CoverLetterRequirement", "NormalizedPosting", "SOURCES", "Source"]
 
 
 SOURCES: dict[str, Source] = {

@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from app.services.sources import SOURCES
+from app.services.sources.protocol import CoverLetterRequirement
 from app.services.sources.greenhouse import greenhouse_source
 from app.services.sources.protocol import Source
 
@@ -196,3 +197,13 @@ async def test_fetch_one_url_raises_on_non_greenhouse_url():
             await greenhouse_source.fetch_one_url(
                 "https://example.com/jobs/1", http=http
             )
+
+
+# --- CoverLetterRequirement -------------------------------------------------
+
+
+def test_cover_letter_requirement_should_generate():
+    assert CoverLetterRequirement.REQUIRED.should_generate()
+    assert CoverLetterRequirement.OPTIONAL.should_generate()
+    assert CoverLetterRequirement.UNKNOWN.should_generate()
+    assert not CoverLetterRequirement.NOT_PRESENT.should_generate()

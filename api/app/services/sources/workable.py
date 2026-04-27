@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "WorkableSource",
@@ -191,6 +191,41 @@ class WorkableSource:
         slug, shortcode = parsed
         detail = await _fetch_detail(slug, shortcode, http=http)
         return _normalize_one(detail, slug=slug)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        parsed = _parse_workable_url(apply_url)
+        if parsed is None:
+            return CoverLetterRequirement.UNKNOWN
+        slug, shortcode = parsed
+        url = f"{WORKABLE_DETAIL_URL}/{slug}/jobs/{shortcode}"
+        try:
+            resp = await http.get(url, timeout=10.0)
+            if resp.status_code != 200:
+                return CoverLetterRequirement.UNKNOWN
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return CoverLetterRequirement.UNKNOWN
+        form = (data.get("application_form") or {}).get("form_fields") or []
+        for f in form:
+            key = (f.get("key") or "").lower().replace("-", "_")
+            label = (f.get("label") or "").lower()
+            if (
+                "cover_letter" in key
+                or "coverletter" in key
+                or "cover letter" in label
+            ):
+                return (
+                    CoverLetterRequirement.REQUIRED
+                    if f.get("required")
+                    else CoverLetterRequirement.OPTIONAL
+                )
+        return CoverLetterRequirement.NOT_PRESENT
 
 
 workable_source = WorkableSource()

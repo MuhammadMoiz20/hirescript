@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "LeverSource",
@@ -160,6 +160,39 @@ class LeverSource:
             # Some endpoints wrap a single posting in a list; pick the first.
             raw = raw[0] if raw else {}
         return _normalize_one(raw)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        parsed = _parse_lever_url(apply_url)
+        if parsed is None:
+            return CoverLetterRequirement.UNKNOWN
+        slug, posting_id = parsed
+        url = f"{LEVER_BASE_URL}/{slug}/{posting_id}"
+        try:
+            resp = await http.get(url, params={"mode": "json"}, timeout=10.0)
+            if resp.status_code != 200:
+                return CoverLetterRequirement.UNKNOWN
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return CoverLetterRequirement.UNKNOWN
+        questions = data.get("applicationQuestions") or []
+        if questions:
+            for q in questions:
+                label = (q.get("text") or q.get("label") or "").lower()
+                if "cover letter" in label:
+                    return (
+                        CoverLetterRequirement.REQUIRED
+                        if q.get("required")
+                        else CoverLetterRequirement.OPTIONAL
+                    )
+            return CoverLetterRequirement.NOT_PRESENT
+        # Default Lever apply page accepts a CL textarea/file but doesn't require one.
+        return CoverLetterRequirement.OPTIONAL
 
 
 lever_source = LeverSource()
