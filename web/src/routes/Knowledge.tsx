@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import TopChrome from "../components/ui/TopChrome";
 import ProfileTab from "../components/knowledge/ProfileTab";
 import DocumentsTab from "../components/knowledge/DocumentsTab";
 import SourcesTab from "../components/knowledge/SourcesTab";
@@ -9,6 +8,8 @@ export type KnowledgeTab = "profile" | "documents" | "sources";
 const TAB_IDS: KnowledgeTab[] = ["profile", "documents", "sources"];
 
 interface Props {
+  // T26: Suite shell now provides global chrome; onBack kept optional for
+  // legacy callers but no longer wired to a route-level top bar.
   onBack?: () => void;
   tab?: KnowledgeTab;
   onTabChange?: (tab: KnowledgeTab) => void;
@@ -37,7 +38,8 @@ function writeTabToLocation(tab: KnowledgeTab) {
   }
 }
 
-export default function Knowledge({ onBack, tab: controlledTab, onTabChange }: Props) {
+export default function Knowledge({ onBack: _onBack, tab: controlledTab, onTabChange }: Props) {
+  void _onBack;
   const [internalTab, setInternalTab] = useState<KnowledgeTab>(() => {
     if (controlledTab) return controlledTab;
     return readTabFromLocation() ?? "profile";
@@ -58,7 +60,6 @@ export default function Knowledge({ onBack, tab: controlledTab, onTabChange }: P
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome onLogoClick={onBack}>Knowledge</TopChrome>
       <div style={{ flex: 1, overflowY: "auto" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(16px, 3vw, 24px) clamp(16px, 3vw, 24px) 0" }}>
           <div style={{ marginBottom: 4 }}>

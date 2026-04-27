@@ -25,7 +25,6 @@ import { useNavigate } from "react-router-dom";
 import { api, Posting, PostingDetail } from "../api";
 import EmptyState from "../components/ui/EmptyState";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
-import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import PostingCard, { POSTING_ROW_COLUMNS } from "../components/PostingCard";
 
@@ -93,7 +92,8 @@ function compareBy(a: Posting, b: Posting, key: SortKey): number {
   }
 }
 
-export default function Inbox({ onBack, navigateOverride }: Props) {
+export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
+  void _onBack;
   const navigate = useNavigate();
   const go = navigateOverride || ((p: string) => navigate(p));
 
@@ -218,7 +218,6 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome onLogoClick={onBack}>Inbox</TopChrome>
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           {/* Filter chip bar */}

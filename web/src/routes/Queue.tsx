@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, Application } from "../api";
-import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import QueueCard from "../components/QueueCard";
 
@@ -61,7 +60,8 @@ export function applicationToLane(app: Application): LaneId | null {
   return "applying";
 }
 
-export default function Queue({ onBack, navigateOverride }: Props) {
+export default function Queue({ onBack: _onBack, navigateOverride }: Props) {
+  void _onBack;
   const navigate = useNavigate();
   const go = navigateOverride || ((p: string) => navigate(p));
 
@@ -133,8 +133,6 @@ export default function Queue({ onBack, navigateOverride }: Props) {
       data-testid="queue-route"
       style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper-2)" }}
     >
-      <TopChrome onLogoClick={onBack}>Queue</TopChrome>
-
       {/* Page header — eyebrow + title + sub, per bundle. */}
       <header
         style={{

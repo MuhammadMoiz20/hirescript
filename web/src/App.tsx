@@ -114,7 +114,8 @@ function StateApp() {
   const { theme, toggle: toggleTheme } = useTheme();
   // T24: TopBar.unreadCount now reflects the notification store. The store
   // starts empty in Slice 2.5 — job-state / sync-failure events will seed it
-  // in later slices. JobsBadge keeps its own polling for the /jobs page link.
+  // in later slices. (T26 removed the standalone JobsBadge component; the
+  // /jobs route now relies on the suite TopBar bell + drawer for unread state.)
   const { notifications, unreadCount } = useNotifications();
 
   const goOverview = useCallback(() => {

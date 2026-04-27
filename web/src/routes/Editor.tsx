@@ -9,7 +9,6 @@ import DiffView from "../components/DiffView";
 import SectionFormEditor from "../components/SectionFormEditor";
 import VersionHistory from "../components/VersionHistory";
 import OverflowBanner from "../components/OverflowBanner";
-import TopChrome from "../components/ui/TopChrome";
 import EditorLeftRail, { EditorView } from "../components/editor/EditorLeftRail";
 import EditorToolbar from "../components/editor/EditorToolbar";
 import ChatDrawer from "../components/editor/ChatDrawer";
@@ -299,11 +298,6 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   if (bp === "mobile") {
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-        <TopChrome onLogoClick={onBack}>
-          <span>Library</span>
-          <span style={{ color: "var(--rule-strong)" }}>/</span>
-          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
-        </TopChrome>
         <EditorToolbar
           resumeName={resumeName}
           onBack={onBack}
@@ -398,12 +392,6 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome onLogoClick={onBack}>
-        <span>Library</span>
-        <span style={{ color: "var(--rule-strong)" }}>/</span>
-        <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
-      </TopChrome>
-
       <OverflowBanner pageCount={pageCount} overflowCount={overflowCount} onTighten={tighten} busy={tightening} />
       <div
         style={{

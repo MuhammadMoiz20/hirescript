@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Application } from "../api";
-import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import Sparkline from "../components/ui/Sparkline";
 import StatusPill from "../components/ui/StatusPill";
@@ -26,7 +25,8 @@ const SPARK_DAYS = 14;
  * fetches the next page via `offset`. Slice 2.5 keeps this client-side
  * concatenation; switching to server-side cursoring is a later concern.
  */
-export default function HistoryMassApply({ onBack }: Props) {
+export default function HistoryMassApply({ onBack: _onBack }: Props) {
+  void _onBack;
   const [items, setItems] = useState<Application[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -90,8 +90,6 @@ export default function HistoryMassApply({ onBack }: Props) {
         background: "var(--paper)",
       }}
     >
-      <TopChrome onLogoClick={onBack}>History</TopChrome>
-
       {/* Page header — eyebrow / title / sub + sparkline strip. */}
       <header
         style={{
