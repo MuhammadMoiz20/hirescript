@@ -278,8 +278,26 @@ function SourceGroup({
               background: "var(--paper)",
             }}
           >
-            <span style={{ fontSize: 13, color: "var(--ink)" }}>
+            <span style={{ fontSize: 13, color: "var(--ink)", display: "inline-flex", alignItems: "center", gap: 6 }}>
               {c.display_name}
+              {c.discovered_by === "agent" && (
+                <span
+                  data-testid={`company-proposed-${c.id}`}
+                  title={c.discovery_rationale || "Proposed by the discovery agent."}
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 9,
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    padding: "1px 5px",
+                    border: "1px solid var(--accent)",
+                    color: "var(--accent)",
+                    borderRadius: 2,
+                  }}
+                >
+                  Proposed
+                </span>
+              )}
             </span>
             <span
               className="mono"

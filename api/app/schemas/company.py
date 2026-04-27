@@ -13,6 +13,8 @@ class CompanyOut(BaseModel):
     display_name: str
     source: str
     enabled: bool
+    discovered_by: str | None = None
+    discovery_rationale: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

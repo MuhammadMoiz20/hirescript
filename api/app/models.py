@@ -202,6 +202,12 @@ class Company(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )
+    # Slice-5 Task 11: agentic discovery — when the discover_companies
+    # agent inserts a row it tags ``discovered_by="agent"`` and stores
+    # the model's rationale so the user can review before enabling.
+    # Manually-added rows leave both NULL.
+    discovered_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

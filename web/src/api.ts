@@ -642,6 +642,11 @@ export type Company = {
   slug: string;
   display_name: string;
   enabled: boolean;
+  // Slice-5 Task 11: agentic discovery — populated when the
+  // discover_companies agent inserted this row. UI uses these to render
+  // a "Proposed" chip + rationale tooltip in the Companies admin page.
+  discovered_by?: string | null;
+  discovery_rationale?: string | null;
   created_at: string;
 };
 

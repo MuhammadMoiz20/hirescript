@@ -241,6 +241,32 @@ async def _enqueue_due_gmail(sf) -> None:
         await s.commit()
 
 
+async def _enqueue_due_discovery(sf) -> None:
+    """Enqueue one ``discover_companies`` job per day at ~03:00 UTC.
+
+    Drops the tick if any ``discover_companies`` job is already queued
+    or running so we never stack proposals while the agent is mid-run.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    if now.hour != 3:
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "discover_companies",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="discover_companies", status="queued", payload={}))
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
@@ -268,6 +294,10 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
             await _enqueue_due_amode_submits(sf)
         except Exception:
             log.exception("scheduler error (a-mode submits)")
+        try:
+            await _enqueue_due_discovery(sf)
+        except Exception:
+            log.exception("scheduler error (discover_companies)")
 
         if os.environ.get("GMAIL_USER"):
             now = loop.time()

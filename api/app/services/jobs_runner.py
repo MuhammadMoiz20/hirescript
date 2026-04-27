@@ -57,6 +57,7 @@ from app.models import (
 )
 from app.schemas.profile import Profile
 from app.services import answer_cache, notifications
+from app.services.agents import discover_companies as agent_discover
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
@@ -1904,3 +1905,117 @@ RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "prepare_application": run_prepare_application_job,
     "submit_application": run_submit_application_job,
 }
+
+
+# Slice-5 Task 11 — agentic company discovery. Distinct runner module
+# from the rest of the file because it has no posting/application
+# coupling; it just talks to the discovery agent and inserts companies.
+async def run_discover_companies_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``discover_companies`` job.
+
+    Reads the user's profile + the existing companies allowlist, calls
+    the discovery agent, validates each proposal by hitting the matching
+    source's ``fetch_company_postings``, and inserts verified proposals
+    into ``companies`` with ``enabled=False`` and
+    ``discovered_by="agent"``. Duplicate ``(slug, source)`` pairs are
+    silently dropped so we never overwrite a row the user has already
+    enabled or modified.
+    """
+    async with sf() as s:
+        profile_row = (
+            await s.execute(select(ProfileModel).where(ProfileModel.user_id == 1))
+        ).scalar_one_or_none()
+        profile = profile_row.data if profile_row is not None else {}
+        existing_rows = (
+            await s.execute(select(Company))
+        ).scalars().all()
+        existing = [
+            {
+                "slug": r.slug,
+                "source": r.source,
+                "display_name": r.display_name,
+                "enabled": r.enabled,
+            }
+            for r in existing_rows
+        ]
+        existing_keys = {(r.source, r.slug) for r in existing_rows}
+
+    await emit_event(sf, job_id, phase="discover_start", message="agent", data={})
+    envelope = await agent_discover.propose_companies(
+        profile=profile, existing=existing
+    )
+    proposals = envelope.get("proposals") or []
+
+    inserted = 0
+    skipped_invalid = 0
+    skipped_dup = 0
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        for p in proposals:
+            if not isinstance(p, dict):
+                skipped_invalid += 1
+                continue
+            source = (p.get("source") or "").strip()
+            slug = (p.get("slug") or "").strip()
+            display = (p.get("display_name") or "").strip() or slug
+            rationale = p.get("rationale") or None
+            if not source or not slug or source not in SOURCES:
+                skipped_invalid += 1
+                continue
+            if (source, slug) in existing_keys:
+                skipped_dup += 1
+                continue
+            adapter = SOURCES[source]
+            try:
+                postings = await adapter.fetch_company_postings(
+                    slug, http=http
+                )
+            except TypeError:
+                # Playwright-only adapters don't accept ``http=``; skip
+                # the validation fetch and trust the agent for those.
+                postings = [None]
+            except Exception:
+                logger.exception(
+                    "discover: validation fetch failed for %s/%s",
+                    source,
+                    slug,
+                )
+                skipped_invalid += 1
+                continue
+            if not postings:
+                skipped_invalid += 1
+                continue
+            async with sf() as s:
+                s.add(
+                    Company(
+                        slug=slug,
+                        display_name=display,
+                        source=source,
+                        enabled=False,
+                        discovered_by="agent",
+                        discovery_rationale=rationale,
+                    )
+                )
+                try:
+                    await s.commit()
+                    inserted += 1
+                    existing_keys.add((source, slug))
+                except IntegrityError:
+                    await s.rollback()
+                    skipped_dup += 1
+
+    await emit_event(
+        sf,
+        job_id,
+        phase="discover_done",
+        message=f"inserted={inserted} dup={skipped_dup} invalid={skipped_invalid}",
+        data={
+            "inserted": inserted,
+            "skipped_dup": skipped_dup,
+            "skipped_invalid": skipped_invalid,
+        },
+    )
+
+
+RUNNERS["discover_companies"] = run_discover_companies_job
