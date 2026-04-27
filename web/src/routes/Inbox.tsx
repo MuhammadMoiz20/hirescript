@@ -27,6 +27,7 @@ import EmptyState from "../components/ui/EmptyState";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import Button from "../components/ui/Button";
 import PostingCard, { POSTING_ROW_COLUMNS } from "../components/PostingCard";
+import PasteUrlDialog from "../components/PasteUrlDialog";
 
 interface Props {
   onBack?: () => void;
@@ -57,10 +58,18 @@ const TIER_CHIPS: Array<ChipOpt<string>> = [
   { id: "skip", label: "Skip" },
 ];
 
-// Source filter is client-side; surfaces the distinct sources present in the
-// fetched page. Bundle's design includes a source filter; backend doesn't
-// expose a `source` query param yet, so we filter locally.
+// Source filter — Slice 4 wires `GET /postings?source=` server-side. Chips
+// cover the five ingest sources the backend produces.
 const SOURCE_ALL = "all";
+
+const SOURCE_CHIPS: Array<ChipOpt<string>> = [
+  { id: SOURCE_ALL, label: "All" },
+  { id: "greenhouse", label: "Greenhouse" },
+  { id: "lever", label: "Lever" },
+  { id: "ashby", label: "Ashby" },
+  { id: "workable", label: "Workable" },
+  { id: "gmail_digest", label: "Gmail digest" },
+];
 
 // Backend statuses considered "needs you" — i.e. waiting on user action.
 const NEEDS_STATUSES = new Set(["ingested", "classified"]);
@@ -114,16 +123,18 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
   const [detail, setDetail] = useState<PostingDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [preparingId, setPreparingId] = useState<number | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   async function refresh() {
     setLoading(true);
     setError(null);
     try {
-      // Server-side filter only on tier (a known backend param). Status is
-      // applied client-side because the chip groups (needs/queued/prepared)
-      // collapse multiple backend states.
+      // Server-side filters on tier and source. Status is applied
+      // client-side because the chip groups (needs/queued/prepared) collapse
+      // multiple backend states.
       const list = await api.listPostings({
         tier: tier !== "all" ? tier : undefined,
+        source: sourceFilter !== SOURCE_ALL ? sourceFilter : undefined,
         limit: 200,
       });
       setPostings(list.items);
@@ -138,7 +149,7 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tier]);
+  }, [tier, sourceFilter]);
 
   useEffect(() => {
     if (drawerId == null) {
@@ -152,18 +163,10 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
       .finally(() => setDetailLoading(false));
   }, [drawerId]);
 
-  // Distinct sources for the source chip group (client-side derived).
-  const sources = useMemo(() => {
-    const set = new Set<string>();
-    postings.forEach((p) => set.add(p.source));
-    return Array.from(set).sort();
-  }, [postings]);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const out = postings.filter((p) => {
       if (!statusFilterMatches(statusFilter, p.status)) return false;
-      if (sourceFilter !== SOURCE_ALL && p.source !== sourceFilter) return false;
       if (q) {
         const hay = `${p.company || ""} ${p.title}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -175,7 +178,7 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return out;
-  }, [postings, statusFilter, sourceFilter, search, sortKey, sortDir]);
+  }, [postings, statusFilter, search, sortKey, sortDir]);
 
   function toggleSort(k: SortKey) {
     if (k === sortKey) {
@@ -248,20 +251,13 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
               onChange={setTier}
               options={TIER_CHIPS}
             />
-            {sources.length > 1 && (
-              <>
-                <Divider />
-                <ChipGroup
-                  label="Source filter"
-                  value={sourceFilter}
-                  onChange={setSourceFilter}
-                  options={[
-                    { id: SOURCE_ALL, label: "Any source" },
-                    ...sources.map((s) => ({ id: s, label: s })),
-                  ]}
-                />
-              </>
-            )}
+            <Divider />
+            <ChipGroup
+              label="Source filter"
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              options={SOURCE_CHIPS}
+            />
 
             <input
               type="search"
@@ -291,6 +287,14 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
             >
               {loading ? "Loading…" : `${filtered.length} of ${total}`}
             </span>
+            <Button
+              size="sm"
+              variant="default"
+              data-testid="inbox-paste-url"
+              onClick={() => setPasteOpen(true)}
+            >
+              Paste job URL
+            </Button>
             <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
               Refresh
             </Button>
@@ -415,6 +419,19 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
             )}
           </div>
         </div>
+
+        <PasteUrlDialog
+          open={pasteOpen}
+          onClose={() => setPasteOpen(false)}
+          onCreated={(p) => {
+            setPasteOpen(false);
+            // Insert into the head of the list so the row is visible without
+            // a refetch, then auto-select the drawer for the new posting.
+            setPostings((prev) => [p, ...prev.filter((x) => x.id !== p.id)]);
+            setTotal((t) => t + 1);
+            setDrawerId(p.id);
+          }}
+        />
 
         {drawerId != null && (
           <PostingDrawer

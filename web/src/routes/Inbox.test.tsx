@@ -8,6 +8,7 @@ const mockApi = vi.hoisted(() => ({
   getPosting: vi.fn(),
   preparePosting: vi.fn(),
   skipPosting: vi.fn(),
+  pasteJobUrl: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: mockApi }));
@@ -174,6 +175,84 @@ test("status chip filters client-side without an extra fetch", async () => {
   fireEvent.click(within(statusGroup).getByRole("button", { name: /submitted/i }));
   expect(screen.queryByText("Acme Corp")).not.toBeInTheDocument();
   expect(screen.getByText(/no postings match/i)).toBeInTheDocument();
+});
+
+test("source chips fire fetch with the right `source` query param", async () => {
+  renderInbox();
+  await waitFor(() => expect(mockApi.listPostings).toHaveBeenCalledTimes(1));
+  // First call has no source filter.
+  expect(mockApi.listPostings.mock.calls[0][0].source).toBeUndefined();
+
+  const sourceGroup = screen.getByRole("group", { name: /source filter/i });
+
+  fireEvent.click(within(sourceGroup).getByRole("button", { name: "Lever" }));
+  await waitFor(() => expect(mockApi.listPostings).toHaveBeenCalledTimes(2));
+  expect(mockApi.listPostings.mock.calls[1][0]).toMatchObject({ source: "lever" });
+
+  fireEvent.click(within(sourceGroup).getByRole("button", { name: "Workable" }));
+  await waitFor(() => expect(mockApi.listPostings).toHaveBeenCalledTimes(3));
+  expect(mockApi.listPostings.mock.calls[2][0]).toMatchObject({ source: "workable" });
+
+  // "All" clears the source filter — refetches with source unset.
+  fireEvent.click(within(sourceGroup).getByRole("button", { name: "All" }));
+  await waitFor(() => expect(mockApi.listPostings).toHaveBeenCalledTimes(4));
+  expect(mockApi.listPostings.mock.calls[3][0].source).toBeUndefined();
+});
+
+test("paste-url button is visible and opens the dialog", async () => {
+  renderInbox();
+  await screen.findByText("Acme Corp");
+
+  const btn = screen.getByTestId("inbox-paste-url");
+  expect(btn).toBeVisible();
+  fireEvent.click(btn);
+
+  expect(await screen.findByTestId("paste-url-dialog")).toBeInTheDocument();
+});
+
+test("pasting a URL inserts the new posting and selects the drawer", async () => {
+  const fresh = {
+    id: 999,
+    source: "workable",
+    source_job_id: "wk-1",
+    company: "Miro",
+    title: "Senior Frontend",
+    location: "Remote",
+    apply_url: "https://apply.workable.com/miro/j/wk-1/",
+    tier: null,
+    fit_score: null,
+    status: "ingested",
+    ingested_at: "2026-04-27T00:00:00Z",
+  };
+  mockApi.pasteJobUrl.mockResolvedValue(fresh);
+  mockApi.getPosting.mockResolvedValue({
+    ...fresh,
+    description_text: "Workable JD",
+    description_html: null,
+    meta: {},
+    canonical_key: "miro-senior-frontend",
+    classification_rationale: null,
+  });
+
+  renderInbox();
+  await screen.findByText("Acme Corp");
+
+  fireEvent.click(screen.getByTestId("inbox-paste-url"));
+  fireEvent.change(await screen.findByTestId("paste-url-input"), {
+    target: { value: "https://apply.workable.com/miro/j/wk-1/" },
+  });
+  fireEvent.click(screen.getByTestId("paste-url-submit"));
+
+  await waitFor(() =>
+    expect(mockApi.pasteJobUrl).toHaveBeenCalledWith(
+      "https://apply.workable.com/miro/j/wk-1/",
+    ),
+  );
+  // Row visible (and possibly mirrored in drawer header).
+  const miros = await screen.findAllByText("Miro");
+  expect(miros.length).toBeGreaterThanOrEqual(1);
+  // Drawer auto-opens for the new posting.
+  await waitFor(() => expect(mockApi.getPosting).toHaveBeenCalledWith(999));
 });
 
 test("toggling a sortable header reverses the row order", async () => {
