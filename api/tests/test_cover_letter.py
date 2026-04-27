@@ -7,7 +7,7 @@ import logging
 import pytest
 from sqlalchemy import select
 
-from app.models import JobPosting, Profile as ProfileModel, User
+from app.models import ClaudeUsage, JobPosting, Profile as ProfileModel, User
 from app.services import cover_letter as cl
 
 
@@ -103,6 +103,14 @@ async def test_cover_letter_includes_kb_chunks_in_prompt(monkeypatch, db_session
     for c in chunks:
         assert c["text"] in captured["user"]
     assert "Backend Engineer" in captured["user"]
+
+    # claude_router.record_usage wrote a row for the cover_letter task.
+    usage = (
+        await db_session.execute(select(ClaudeUsage))
+    ).scalars().all()
+    assert len(usage) == 1
+    assert usage[0].task_kind == "cover_letter"
+    assert usage[0].client == "api"
 
 
 @pytest.mark.asyncio
