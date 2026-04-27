@@ -22,6 +22,7 @@ dependencies = [
     "pylatexenc==2.10",
     "httpx==0.27.*",
     "beautifulsoup4==4.12.*",
+    "playwright>=1.48,<2.0",
 ]
 
 [project.optional-dependencies]
