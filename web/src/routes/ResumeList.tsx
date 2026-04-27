@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { api, Job, JobDescriptionOut, ResumeGroup, Variant } from "../api";
 import TailorModal from "../components/TailorModal";
 import MassApplyDialog from "../components/MassApplyDialog";
-import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import KebabMenu from "../components/ui/KebabMenu";
+import PageCountBadge from "../components/ui/PageCountBadge";
+import CompileChip from "../components/ui/CompileChip";
+import Glyph from "../components/ui/Glyph";
 import Onboarding from "./Onboarding";
 
 type View = "library" | "onboarding";
@@ -14,24 +16,6 @@ function fmtDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function Meta({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      className="mono"
-      style={{
-        fontSize: 11,
-        color: "var(--ink-3)",
-        padding: "2px 8px",
-        border: "1px solid var(--rule)",
-        borderRadius: 2,
-        background: "var(--paper-2)",
-      }}
-    >
-      {children}
-    </span>
-  );
 }
 
 interface RenameTitleProps {
@@ -64,8 +48,9 @@ function RenameTitle({ name, fontSize, serif, editing, onSave, onCancel }: Renam
         style={{
           fontFamily: serif ? "var(--f-serif)" : undefined,
           fontSize,
-          letterSpacing: serif ? "-0.01em" : undefined,
+          letterSpacing: serif ? "-0.015em" : undefined,
           fontWeight: serif ? 400 : 500,
+          color: "var(--ink)",
         }}
       >
         {name}
@@ -106,7 +91,7 @@ function RenameTitle({ name, fontSize, serif, editing, onSave, onCancel }: Renam
       style={{
         fontFamily: serif ? "var(--f-serif)" : undefined,
         fontSize,
-        letterSpacing: serif ? "-0.01em" : undefined,
+        letterSpacing: serif ? "-0.015em" : undefined,
         fontWeight: serif ? 400 : 500,
         padding: "2px 6px",
         border: "1px solid var(--rule-strong)",
@@ -174,6 +159,34 @@ type DeleteTarget =
   | { kind: "simple"; id: number; name: string; isMaster: boolean }
   | { kind: "promote"; masterId: number; name: string; variants: Variant[] };
 
+const VARIANT_GRID = "minmax(220px, 1.6fr) 1.4fr 120px 140px 96px";
+
+function VariantHeader() {
+  return (
+    <div
+      className="mono"
+      data-testid="variant-header"
+      style={{
+        display: "grid",
+        gridTemplateColumns: VARIANT_GRID,
+        gap: 18,
+        padding: "8px 14px",
+        fontSize: 10.5,
+        color: "var(--ink-3)",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        borderBottom: "1px solid var(--rule)",
+      }}
+    >
+      <span>Name</span>
+      <span>Job description</span>
+      <span>Created</span>
+      <span>Page count</span>
+      <span style={{ textAlign: "right" }}>Actions</span>
+    </div>
+  );
+}
+
 interface VariantRowProps {
   variant: Variant;
   onOpen: (id: number) => void;
@@ -188,59 +201,115 @@ interface VariantRowProps {
 function VariantRow({
   variant, onOpen, editingId, setEditingId, onRename, onDelete, onDownload, onViewJd,
 }: VariantRowProps) {
+  const editing = editingId === variant.id;
   return (
     <div
+      data-testid="variant-row"
+      data-resume-id={variant.id}
       style={{
-        display: "flex",
+        display: "grid",
+        gridTemplateColumns: VARIANT_GRID,
+        gap: 18,
+        padding: "12px 14px",
         alignItems: "center",
-        gap: 10,
-        padding: "10px 0",
-        borderTop: "1px solid var(--rule)",
+        borderBottom: "1px solid var(--rule)",
         fontSize: 13,
       }}
     >
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--rule-strong)",
-          flexShrink: 0,
-        }}
-      />
-      <RenameTitle
-        name={variant.name}
-        fontSize={13}
-        serif={false}
-        editing={editingId === variant.id}
-        onSave={async (next) => {
-          await onRename(variant.id, next);
-          setEditingId(null);
-        }}
-        onCancel={() => setEditingId(null)}
-      />
-      {variant.jd_company && (
-        <span style={{ color: "var(--ink-3)", fontSize: 12 }}>
-          {variant.jd_title} @ {variant.jd_company}
-        </span>
-      )}
-      <span style={{ flex: 1 }} />
-      <Button size="sm" variant="ghost" onClick={() => onOpen(variant.id)}>
-        Open
-      </Button>
-      <KebabMenu
-        items={[
-          { label: "Rename", icon: "edit", onClick: () => setEditingId(variant.id) },
-          { label: "Download PDF", icon: "download", onClick: () => onDownload(variant.id, variant.name) },
-          {
-            label: "View JD",
-            icon: "doc",
-            onClick: () => onViewJd(variant),
-            disabled: variant.job_description_id == null,
-          },
-          { label: "Delete", icon: "x", danger: true, onClick: () => onDelete(variant) },
-        ]}
-      />
+      <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <span
+          aria-hidden
+          style={{ width: 3, height: 22, background: "var(--rule-strong)", flexShrink: 0 }}
+        />
+        <button
+          onClick={() => !editing && onOpen(variant.id)}
+          style={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: editing ? "text" : "pointer",
+            textAlign: "left",
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <RenameTitle
+            name={variant.name}
+            fontSize={14}
+            serif={true}
+            editing={editing}
+            onSave={async (next) => {
+              await onRename(variant.id, next);
+              setEditingId(null);
+            }}
+            onCancel={() => setEditingId(null)}
+          />
+        </button>
+      </span>
+      <span style={{ color: "var(--ink-2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {variant.jd_company ? (
+          <>
+            <b style={{ color: "var(--ink)" }}>{variant.jd_company}</b>
+            <span style={{ color: "var(--ink-3)" }}> — </span>
+            {variant.jd_title}
+          </>
+        ) : (
+          <span style={{ color: "var(--ink-3)" }}>No JD linked</span>
+        )}
+      </span>
+      <span className="mono" style={{ color: "var(--ink-3)", fontSize: 12 }}>
+        {fmtDate(variant.updated_at)}
+      </span>
+      <span>
+        <PageCountBadge state="unknown" size="sm" />
+      </span>
+      <span style={{ display: "flex", justifyContent: "flex-end", gap: 4, alignItems: "center" }}>
+        <button
+          title="Open editor"
+          aria-label={`Open ${variant.name}`}
+          onClick={() => onOpen(variant.id)}
+          style={{
+            padding: 5,
+            color: "var(--ink-3)",
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            display: "inline-flex",
+          }}
+        >
+          <Glyph name="eye" size={13} />
+        </button>
+        <button
+          title="Download PDF"
+          aria-label={`Download ${variant.name}`}
+          onClick={() => onDownload(variant.id, variant.name)}
+          style={{
+            padding: 5,
+            color: "var(--ink-3)",
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            display: "inline-flex",
+          }}
+        >
+          <Glyph name="download" size={13} />
+        </button>
+        <KebabMenu
+          items={[
+            { label: "Rename", icon: "edit", onClick: () => setEditingId(variant.id) },
+            { label: "Download PDF", icon: "download", onClick: () => onDownload(variant.id, variant.name) },
+            {
+              label: "View JD",
+              icon: "doc",
+              onClick: () => onViewJd(variant),
+              disabled: variant.job_description_id == null,
+            },
+            { label: "Delete", icon: "x", danger: true, onClick: () => onDelete(variant) },
+          ]}
+        />
+      </span>
     </div>
   );
 }
@@ -260,37 +329,72 @@ interface MasterCardProps {
 }
 
 function MasterCard({
-  group, onOpen, onTailor, onMassApply, editingId, setEditingId, onRename, onDelete, onDuplicate, onDownload, onViewJd,
+  group, onOpen, onTailor, onMassApply, editingId, setEditingId,
+  onRename, onDelete, onDuplicate, onDownload, onViewJd,
 }: MasterCardProps) {
   const { master, variants } = group;
   return (
-    <div
+    <section
+      data-testid="master-card"
+      data-resume-id={master.id}
       style={{
-        border: "1px solid var(--rule)",
+        border: "1px solid var(--ink)",
         background: "var(--paper)",
-        borderRadius: 4,
-        padding: 16,
-        marginBottom: 14,
+        borderRadius: 3,
+        padding: "20px 22px",
+        marginBottom: 28,
       }}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <RenameTitle
-            name={master.name}
-            fontSize={18}
-            serif={true}
-            editing={editingId === master.id}
-            onSave={async (next) => {
-              await onRename(master.id, next);
-              setEditingId(null);
+      <header style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <span
+              className="mono"
+              style={{
+                fontSize: 10,
+                padding: "1px 6px",
+                background: "var(--ink)",
+                color: "var(--paper)",
+                borderRadius: 2,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+            >
+              Master
+            </span>
+            <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+              template: <span style={{ color: "var(--ink-2)" }}>{master.template_id}</span>
+            </span>
+          </div>
+          <h2 style={{ margin: "2px 0 8px" }}>
+            <RenameTitle
+              name={master.name}
+              fontSize={24}
+              serif={true}
+              editing={editingId === master.id}
+              onSave={async (next) => {
+                await onRename(master.id, next);
+                setEditingId(null);
+              }}
+              onCancel={() => setEditingId(null)}
+            />
+          </h2>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
             }}
-            onCancel={() => setEditingId(null)}
-          />
-          <Meta>master</Meta>
-          <Meta>edited {fmtDate(master.updated_at)}</Meta>
-          <Meta>
-            {variants.length} variant{variants.length === 1 ? "" : "s"}
-          </Meta>
+          >
+            <PageCountBadge state="unknown" />
+            <CompileChip kind="queued" />
+            <Meta label="Last edited" value={fmtDate(master.updated_at)} />
+            <Meta
+              label="Variants"
+              value={String(variants.length)}
+            />
+          </div>
         </div>
         <KebabMenu
           items={[
@@ -312,19 +416,38 @@ function MasterCard({
             },
           ]}
         />
-      </div>
+      </header>
 
-      <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Button variant="primary" icon="doc" onClick={() => onOpen(master.id)}>
           Open editor
         </Button>
         <Button icon="sparkle" onClick={() => onTailor(master.id, master.name)}>
           Tailor to JD
         </Button>
+        <Button variant="ghost" icon="download" onClick={() => onDownload(master.id, master.name)}>
+          PDF
+        </Button>
       </div>
 
       {variants.length > 0 && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 22 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              margin: "0 0 8px",
+            }}
+          >
+            <div className="eyebrow" style={{ color: "var(--ink-3)" }}>
+              Variants · tied to master
+            </div>
+            <span className="mono" style={{ color: "var(--ink-3)", fontSize: 11 }}>
+              {variants.length} variant{variants.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <VariantHeader />
           {variants.map((v) => (
             <VariantRow
               key={v.id}
@@ -342,7 +465,19 @@ function MasterCard({
           ))}
         </div>
       )}
-    </div>
+    </section>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <span
+      className="mono"
+      style={{ fontSize: 11, color: "var(--ink-3)", display: "inline-flex", gap: 5 }}
+    >
+      <span>{label}:</span>
+      <span style={{ color: "var(--ink-2)" }}>{value}</span>
+    </span>
   );
 }
 
@@ -392,7 +527,11 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
     try {
       await api.downloadResumePdf(id, name);
     } catch (e: any) {
-      setErrMsg(e?.error === "compile_failed" ? "Compile failed — open the editor to fix LaTeX." : (e?.message || "Download failed"));
+      setErrMsg(
+        e?.error === "compile_failed"
+          ? "Compile failed — open the editor to fix LaTeX."
+          : e?.message || "Download failed",
+      );
     }
   }
 
@@ -446,10 +585,12 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
   const empty = groups.length === 0;
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome>Library</TopChrome>
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "clamp(16px, 3vw, 24px)" }}>
+    <div
+      data-component="library-route"
+      style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}
+    >
+      <main style={{ flex: 1, overflowY: "auto", padding: "28px 40px 60px" }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto" }}>
           <div
             style={{
               display: "flex",
@@ -457,26 +598,30 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
               justifyContent: "space-between",
               flexWrap: "wrap",
               gap: 12,
-              marginBottom: 20,
+              marginBottom: 24,
             }}
           >
             <div>
-              <div className="eyebrow" style={{ marginBottom: 4 }}>Your resumes</div>
+              <div className="eyebrow" style={{ marginBottom: 4 }}>
+                Your resumes
+              </div>
               <h1
                 style={{
                   fontFamily: "var(--f-serif)",
-                  fontSize: 26,
+                  fontSize: 30,
                   letterSpacing: "-0.02em",
                   margin: 0,
                 }}
               >
-                Resumes
+                Library
               </h1>
             </div>
             {!empty && (
-              <Button variant="primary" icon="plus" onClick={() => setView("onboarding")}>
-                New resume
-              </Button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button icon="plus" onClick={() => setView("onboarding")}>
+                  New resume
+                </Button>
+              </div>
             )}
           </div>
 
@@ -500,7 +645,12 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
               <span>{errMsg}</span>
               <button
                 onClick={() => setErrMsg(null)}
-                style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--ink-2)" }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--ink-2)",
+                }}
                 aria-label="Dismiss"
               >
                 ✕
@@ -510,6 +660,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
 
           {empty ? (
             <div
+              data-testid="library-empty"
               style={{
                 border: "1px dashed var(--rule-strong)",
                 borderRadius: 4,
@@ -556,7 +707,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
             ))
           )}
         </div>
-      </div>
+      </main>
 
       {tailorTarget && (
         <TailorModal
@@ -661,9 +812,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
         <Dialog
           title="Job description"
           onClose={() => setJdView(null)}
-          footer={
-            <Button onClick={() => setJdView(null)}>Close</Button>
-          }
+          footer={<Button onClick={() => setJdView(null)}>Close</Button>}
         >
           {!jdView.jd ? (
             <p style={{ fontSize: 13, color: "var(--ink-3)" }}>Loading…</p>
