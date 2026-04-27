@@ -8,6 +8,8 @@ const mockApi = vi.hoisted(() => ({
   getApplication: vi.fn(),
   submitApplication: vi.fn(),
   deleteApplication: vi.fn(),
+  promoteToA: vi.fn(),
+  pauseA: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: mockApi }));
@@ -41,6 +43,9 @@ const sampleApp = {
   form_payload: { "Why this role?": "Mission alignment." },
   submitted_at: null,
   error: null,
+  verify_ok: true,
+  verify_issues: [] as string[],
+  verify_rationale: null as string | null,
 };
 
 const sampleAppDetail = {
@@ -185,4 +190,89 @@ test("errored card lands in Needs you lane with error string and Retry submit", 
 test("page header renders Queue title", async () => {
   renderQueue();
   expect(screen.getByRole("heading", { name: /the agent's working surface/i })).toBeInTheDocument();
+});
+
+describe("Slice 3 — A-mode + verify + captcha", () => {
+  test("A-mode application shows the A badge inside the card", async () => {
+    const aApp = { ...sampleApp, id: 11, mode: "A" as const };
+    mockApi.listApplications.mockResolvedValue({ items: [aApp], total: 1 });
+    mockApi.getApplication.mockResolvedValue({ ...sampleAppDetail, ...aApp });
+    renderQueue();
+    expect(await screen.findByTestId("queue-card-mode-a")).toBeInTheDocument();
+  });
+
+  test("captcha-paused application surfaces banner + Resolve & resume A; click promotes", async () => {
+    const cap = {
+      ...sampleApp,
+      id: 12,
+      status: "captcha_pause",
+      mode: "A" as const,
+    };
+    mockApi.listApplications.mockResolvedValue({ items: [cap], total: 1 });
+    mockApi.getApplication.mockResolvedValue({ ...sampleAppDetail, ...cap });
+    mockApi.promoteToA.mockResolvedValue({ ...cap, status: "prepared" });
+
+    renderQueue();
+    const banner = await screen.findByTestId("queue-card-captcha-banner");
+    expect(banner).toHaveTextContent(/captcha required/i);
+    const btn = within(banner).getByTestId("queue-card-resume-a-btn");
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(mockApi.promoteToA).toHaveBeenCalledWith(12),
+    );
+  });
+
+  test("verify-blocked application shows banner with collapsible issues + Edit & retry navigates", async () => {
+    const blocked = {
+      ...sampleApp,
+      id: 13,
+      mode: "A" as const,
+      verify_ok: false,
+      verify_issues: ["Claim 'led 50-person team' not in profile.", "Date mismatch on FooCo."],
+      verify_rationale: "Two unsupported claims.",
+    };
+    mockApi.listApplications.mockResolvedValue({ items: [blocked], total: 1 });
+    mockApi.getApplication.mockResolvedValue({ ...sampleAppDetail, ...blocked });
+
+    const navigate = vi.fn();
+    renderQueue(navigate);
+    const banner = await screen.findByTestId("queue-card-verify-banner");
+    expect(banner).toHaveTextContent(/unsupported claims/i);
+
+    // Issue list collapsed by default.
+    expect(screen.queryByTestId("queue-card-verify-issues")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("queue-card-verify-toggle"));
+    const list = await screen.findByTestId("queue-card-verify-issues");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(list).getByText(/led 50-person team/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("queue-card-verify-edit-btn"));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/queue/13"));
+  });
+
+  test("filtering by mode=A only hides B-mode apps", async () => {
+    const aApp = { ...sampleApp, id: 21, mode: "A" as const };
+    const bApp = { ...sampleApp, id: 22, mode: "B" as const };
+    mockApi.listApplications.mockResolvedValue({ items: [aApp, bApp], total: 2 });
+    mockApi.getApplication.mockImplementation(async (id: number) => ({
+      ...sampleAppDetail,
+      ...(id === 21 ? aApp : bApp),
+      id,
+    }));
+
+    renderQueue();
+    // Initially both rendered (the same posting heading appears in two cards).
+    await waitFor(() =>
+      expect(screen.getAllByTestId("queue-card")).toHaveLength(2),
+    );
+
+    fireEvent.change(screen.getByLabelText(/filter by mode/i), {
+      target: { value: "A" },
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("queue-card")).toHaveLength(1),
+    );
+    expect(screen.getByTestId("queue-filter-count")).toHaveTextContent("1/2");
+  });
 });
