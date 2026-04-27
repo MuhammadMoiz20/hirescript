@@ -75,13 +75,25 @@ def parse_overflows(log: str) -> tuple[OverflowHint, ...]:
     while i < len(raw_lines):
         cur = raw_lines[i]
         if cur.lstrip().startswith("HS_WRAP:") and ">>>" not in cur:
+            # Cap lookahead so a truncated/malformed HS_WRAP entry (no closing
+            # '>>>') cannot swallow the rest of the log and hide subsequent
+            # Overfull \hbox warnings. After 8 attempts without a terminator,
+            # drop the malformed line as-is (won't match _WRAP_RE) and
+            # continue scanning from the next raw line.
+            MAX_LOOKAHEAD = 8
             joined = cur
             j = i + 1
-            while j < len(raw_lines) and ">>>" not in joined:
+            attempts = 0
+            while j < len(raw_lines) and ">>>" not in joined and attempts < MAX_LOOKAHEAD:
                 joined += raw_lines[j]
                 j += 1
-            lines.append(joined)
-            i = j
+                attempts += 1
+            if ">>>" in joined:
+                lines.append(joined)
+                i = j
+            else:
+                lines.append(cur)
+                i += 1
             continue
         lines.append(cur)
         i += 1

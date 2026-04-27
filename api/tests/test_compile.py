@@ -153,6 +153,27 @@ def test_parse_overflows_drops_malformed_wrap_line():
     assert parse_overflows(log) == ()
 
 
+def test_parse_overflows_caps_runaway_hs_wrap_reassembly():
+    """A truncated HS_WRAP line with no closing '>>>' must not swallow the
+    rest of the log. The reassembly lookahead is capped so subsequent
+    Overfull \\hbox warnings are still detected."""
+    filler = "\n".join(f"arbitrary log line {n}" for n in range(20))
+    log = (
+        "HS_WRAP: line=1 over=1.00pt limit=10.00pt text=<<<no closing marker\n"
+        + filler + "\n"
+        "Overfull \\hbox (5.00pt too wide) in paragraph at lines 100--101\n"
+        "[]\\OT1/cmr/m/n/10.95 the offending fragment\n"
+    )
+    hints = parse_overflows(log)
+    # Malformed wrap is dropped (no hint with line_start=1 from _WRAP_RE).
+    assert all(not (h.line_start == 1 and h.line_end == 1) for h in hints)
+    # The hbox warning that appears after the runaway is still detected.
+    hbox = next((h for h in hints if h.line_start == 100 and h.line_end == 101), None)
+    assert hbox is not None, f"expected hbox hint, got {hints!r}"
+    assert hbox.overflow_pt == 5.0
+    assert "offending fragment" in hbox.snippet
+
+
 def test_parse_overflows_handles_triple_angle_in_text():
     # If a bullet legitimately contains '>>>', the non-greedy match takes
     # the first closing '>>>'. We accept slight truncation; we never crash.
