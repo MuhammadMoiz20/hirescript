@@ -96,7 +96,7 @@ def test_get_kb_sources_returns_known_sources_even_when_empty(client_authed):
     assert r.status_code == 200
     body = r.json()
     sources = {s["source"] for s in body}
-    assert sources == {"latex_master", "markdown", "notion"}
+    assert sources == {"latex_master", "markdown", "notion", "website"}
     for s in body:
         assert s["document_count"] == 0
         assert s["chunk_count"] == 0

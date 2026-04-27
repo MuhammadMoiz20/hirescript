@@ -299,6 +299,36 @@ async def _enqueue_due_kb_notion(sf) -> None:
         await s.commit()
 
 
+async def _enqueue_due_kb_website(sf) -> None:
+    """Enqueue a ``kb_sync_website`` job nightly at ~04:00 UTC.
+
+    Drops the tick if any ``kb_sync_website`` job is already queued or
+    running, or if no root URLs are configured.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.kb_sources import website as website_kb
+
+    if not website_kb.root_urls_from_env():
+        return
+    now = datetime.now(timezone.utc)
+    if now.hour != 4:
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "kb_sync_website",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="kb_sync_website", status="queued", payload={}))
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
@@ -339,6 +369,11 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
                 last_kb_notion_tick = now
             except Exception:
                 log.exception("scheduler error (kb_sync_notion)")
+
+        try:
+            await _enqueue_due_kb_website(sf)
+        except Exception:
+            log.exception("scheduler error (kb_sync_website)")
 
         if os.environ.get("GMAIL_USER"):
             now = loop.time()

@@ -2205,3 +2205,57 @@ async def run_kb_sync_notion(
 
 
 RUNNERS["kb_sync_notion"] = run_kb_sync_notion
+
+
+# Slice-5 Task 14 — Personal-website KB sync. Crawls each configured
+# root URL (from ``WEBSITE_ROOT_URLS`` env, comma-separated) and
+# upserts each reachable page into ``kb_documents`` under
+# ``source="website"``. Pages no longer reachable on a re-crawl are
+# purged.
+async def run_kb_sync_website(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``kb_sync_website`` job."""
+    from app.services.kb_sources import website as website_kb
+
+    await emit_event(sf, job_id, phase="kb_sync_start", message="website", data={})
+    try:
+        roots = website_kb.root_urls_from_env()
+        agg = {"created_or_updated": 0, "deleted": 0}
+        for root in roots:
+            async with sf() as s:
+                r = await website_kb.ingest(user_id=1, db=s, root_url=root)
+            agg["created_or_updated"] += int(r.get("created_or_updated", 0))
+            agg["deleted"] += int(r.get("deleted", 0))
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"source": "website", "roots": len(roots), **agg},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="kb_sync_done", message="website", data=agg
+        )
+    except Exception as exc:  # noqa: BLE001
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"error": str(exc)[:500]},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="failed", message=str(exc)[:500], data={}
+        )
+
+
+RUNNERS["kb_sync_website"] = run_kb_sync_website

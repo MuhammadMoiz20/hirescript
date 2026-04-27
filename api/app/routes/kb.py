@@ -14,11 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_user
 from app.db import get_db
 from app.models import KbChunk, KbDocument
-from app.services.kb_sources import latex_master, markdown_folder, notion as notion_kb
+from app.services.kb_sources import (
+    latex_master,
+    markdown_folder,
+    notion as notion_kb,
+    website as website_kb,
+)
 
 router = APIRouter(prefix="/kb", tags=["kb"])
 
-KNOWN_SOURCES = ["latex_master", "markdown", "notion"]
+KNOWN_SOURCES = ["latex_master", "markdown", "notion", "website"]
 _MAX_LIMIT = 200
 
 
@@ -100,6 +105,14 @@ async def sync_source(
             "created_or_updated": int(result.get("created_or_updated", 0)),
             "deleted": int(result.get("deleted", 0)),
         }
+    elif source == "website":
+        roots = website_kb.root_urls_from_env()
+        agg = {"created_or_updated": 0, "deleted": 0}
+        for root in roots:
+            r = await website_kb.ingest(user_id=user_id, db=db, root_url=root)
+            agg["created_or_updated"] += int(r.get("created_or_updated", 0))
+            agg["deleted"] += int(r.get("deleted", 0))
+        extra = agg
 
     doc_count, chunk_count = await _source_counts(db, user_id, source)
     return {
