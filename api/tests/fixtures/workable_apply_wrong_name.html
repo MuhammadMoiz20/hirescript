@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply — Workable</title></head>
+<body>
+<div id="app">
+  <form id="step1">
+    <input id="resume" type="file" name="resume" />
+    <button type="button" data-ui="apply-button">Apply with resume</button>
+  </form>
+</div>
+<script>
+  document.querySelector('[data-ui="apply-button"]').addEventListener('click', () => {
+    // Workable parses the resume and pre-fills with the WRONG name —
+    // simulating a swapped / scrambled PDF. The adapter MUST refuse to
+    // submit and raise parsed_name_mismatch.
+    document.getElementById('app').innerHTML = `
+      <form data-ui="application-form" id="step2" action="/submitted" method="post">
+        <input name="candidate[name]" value="Alice Stranger" />
+        <input name="candidate[email]" type="email" value="alice@elsewhere.test" />
+        <button type="submit" data-ui="submit">Submit application</button>
+      </form>
+    `;
+  });
+</script>
+</body>
+</html>

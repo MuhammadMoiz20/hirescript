@@ -232,9 +232,18 @@ async def drive_form(
                         on_progress, "uploaded_resume", path=resume_path
                     )
 
-            # ATS-specific second-step / parsed-form review hook.
+            # ATS-specific second-step / parsed-form review hook. May
+            # advance the page (e.g. Workable's two-step flow) and surface
+            # fields that didn't exist during the first canonical pass; we
+            # re-walk the canonical fields after it runs so the
+            # required-fields gate sees the post-advance state.
             if spec.post_fill is not None:
                 await spec.post_fill(page, ctx)
+                for field, value in field_values.items():
+                    if field in filled:
+                        continue
+                    if await fill_if_present(page, spec, field, value, on_progress):
+                        filled.add(field)
 
             # Extra label-matched answers — best-effort.
             known_keys = set(spec.selectors.keys()) | {

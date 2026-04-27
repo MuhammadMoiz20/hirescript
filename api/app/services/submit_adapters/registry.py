@@ -14,15 +14,16 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from app.services.submit_adapters import ashby, greenhouse, lever
+from app.services.submit_adapters import ashby, greenhouse, lever, workable
 
 # Keyed by the same string used in ``JobPosting.source`` and the
 # ``app.services.sources.SOURCES`` registry, so the inbox + submit paths
-# share a single vocabulary. Task 3 registers workable here.
+# share a single vocabulary.
 ADAPTERS: dict[str, ModuleType] = {
     "greenhouse": greenhouse,
     "lever": lever,
     "ashby": ashby,
+    "workable": workable,
 }
 
 
