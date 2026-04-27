@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply — Ashby</title></head>
+<body>
+<div id="root"></div>
+<script>
+  // Simulate Ashby's client-side render — mount the form on the next tick
+  // so the adapter exercises the wait-for-selector path.
+  setTimeout(() => {
+    document.getElementById('root').innerHTML = `
+      <form data-testid="application-form" id="application_form" action="/submitted" method="post" enctype="multipart/form-data">
+        <div data-testid="_systemfield_name">
+          <label>Name</label>
+          <input name="_systemfield_name" />
+        </div>
+        <div data-testid="_systemfield_email">
+          <label>Email</label>
+          <input name="_systemfield_email" type="email" />
+        </div>
+        <div data-testid="_systemfield_phoneNumber">
+          <label>Phone</label>
+          <input name="_systemfield_phoneNumber" />
+        </div>
+        <div data-testid="_systemfield_resume">
+          <label>Resume</label>
+          <input name="_systemfield_resume" type="file" />
+        </div>
+        <button type="submit">Submit application</button>
+      </form>
+    `;
+    document.getElementById('application_form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.body.innerHTML =
+        '<div data-testid="application-confirmation"><h1>Application submitted</h1></div>';
+    });
+  }, 50);
+</script>
+</body>
+</html>

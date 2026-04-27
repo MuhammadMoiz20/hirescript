@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply — Ashby</title></head>
+<body>
+<div id="root"></div>
+<script>
+  setTimeout(() => {
+    document.getElementById('root').innerHTML = `
+      <form data-testid="application-form" id="application_form" action="/submitted" method="post" enctype="multipart/form-data">
+        <div data-testid="_systemfield_name">
+          <input name="_systemfield_name" />
+        </div>
+        <div data-testid="_systemfield_resume">
+          <input name="_systemfield_resume" type="file" />
+        </div>
+        <button type="submit">Submit application</button>
+      </form>
+    `;
+  }, 50);
+</script>
+</body>
+</html>
