@@ -15,8 +15,11 @@ import Settings from "./routes/Settings";
 import TopBar from "./components/suite/TopBar";
 import NavRail, { type NavKey } from "./components/suite/NavRail";
 import CommandPalette, { type CommandItem } from "./components/suite/CommandPalette";
+import NotificationsDrawer from "./components/suite/NotificationsDrawer";
+import { useNotifications } from "./components/suite/useNotifications";
+import { notificationStore } from "./components/suite/notificationStore";
 import { useTheme } from "./components/ThemeProvider";
-import { api, listJobs } from "./api";
+import { api } from "./api";
 
 /**
  * View union — existing app states plus Suite shell surfaces.
@@ -106,29 +109,13 @@ function StateApp() {
   const [view, setView] = useState<View>("overview");
   const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("profile");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [unreadJobs, setUnreadJobs] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const navigate = useNavigate();
   const { theme, toggle: toggleTheme } = useTheme();
-
-  // Lifted from JobsBadge: poll active job count to feed TopBar.unreadCount.
-  // TODO: T24 — replace with proper notifications drawer feed.
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const { total } = await listJobs({ status: "queued,running" });
-        if (!cancelled) setUnreadJobs(total);
-      } catch {
-        // ignore polling errors
-      }
-    };
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+  // T24: TopBar.unreadCount now reflects the notification store. The store
+  // starts empty in Slice 2.5 — job-state / sync-failure events will seed it
+  // in later slices. JobsBadge keeps its own polling for the /jobs page link.
+  const { notifications, unreadCount } = useNotifications();
 
   const goOverview = useCallback(() => {
     setOpenId(null);
@@ -271,13 +258,11 @@ function StateApp() {
     <SuiteShell
       view={view}
       editorOpen={editorOpen}
-      unreadCount={unreadJobs}
+      unreadCount={unreadCount}
       theme={theme}
       onToggleTheme={toggleTheme}
       onOpenCommandPalette={() => setPaletteOpen(true)}
-      onOpenNotifications={() => {
-        // TODO: T24 — open notifications drawer.
-      }}
+      onOpenNotifications={() => setNotificationsOpen(true)}
       onNavigate={onNavigate}
       goOverview={goOverview}
     >
@@ -287,6 +272,17 @@ function StateApp() {
         onClose={() => setPaletteOpen(false)}
         items={paletteItems}
       />
+      <NotificationsDrawer
+        open={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        notifications={notifications}
+        onDismiss={(id) => notificationStore.dismiss(id)}
+        onMarkAllRead={() => notificationStore.markAllRead()}
+        onDeepLink={(link) => {
+          setView(link.view);
+          setNotificationsOpen(false);
+        }}
+      />
     </SuiteShell>
   );
 }
@@ -295,6 +291,8 @@ function JobsRoute() {
   const navigate = useNavigate();
   const { theme, toggle: toggleTheme } = useTheme();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const { notifications, unreadCount } = useNotifications();
 
   // Minimal palette while on /jobs — back-to-app navigation.
   const items: CommandItem[] = [
@@ -316,11 +314,11 @@ function JobsRoute() {
     <SuiteShell
       view="jobs"
       editorOpen={false}
-      unreadCount={0}
+      unreadCount={unreadCount}
       theme={theme}
       onToggleTheme={toggleTheme}
       onOpenCommandPalette={() => setPaletteOpen(true)}
-      onOpenNotifications={() => { /* TODO: T24 */ }}
+      onOpenNotifications={() => setNotificationsOpen(true)}
       onNavigate={(key) => {
         // Any nav from inside /jobs returns to the main app, then routes.
         navigate("/");
@@ -338,6 +336,19 @@ function JobsRoute() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         items={items}
+      />
+      <NotificationsDrawer
+        open={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        notifications={notifications}
+        onDismiss={(id) => notificationStore.dismiss(id)}
+        onMarkAllRead={() => notificationStore.markAllRead()}
+        onDeepLink={() => {
+          // Inside /jobs the only deep-link target is the main app; routing
+          // back will let the user re-open the drawer in StateApp if needed.
+          navigate("/");
+          setNotificationsOpen(false);
+        }}
       />
     </SuiteShell>
   );
