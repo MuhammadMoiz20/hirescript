@@ -65,6 +65,7 @@ from app.services.jobs_repo import (
     emit_event,
     enqueue_classify_posting,
 )
+from app.services.sources import SOURCES
 from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
@@ -319,18 +320,17 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             await hb
 
 
-async def run_ingest_greenhouse_job(
+async def run_ingest_source_job(
     sf: SessionFactory, job_id: uuid.UUID
 ) -> None:
-    """Fetch + upsert Greenhouse postings for ``payload['company_slug']``.
+    """Fetch + upsert postings for ``payload['source']`` + ``['company_slug']``.
 
-    Mirrors the heartbeat / terminal-status structure of
-    :func:`run_tailor_job`. On any unexpected exception, marks the job
-    ``failed`` and emits a ``failed`` event with the truncated error.
-
-    A 404 from Greenhouse is *not* an error — the fetcher returns an
-    empty list and we record a successful run with zero postings, so a
-    temporarily-broken board does not stall the scheduler.
+    Looks up the adapter in :data:`app.services.sources.SOURCES`. Mirrors
+    the heartbeat / terminal-status structure of :func:`run_tailor_job`.
+    A 404 from the upstream board is normalized to ``[]`` by the adapter,
+    so a temporarily-broken company board does not stall the scheduler.
+    Companies are looked up by ``(slug, source)`` so different ATS families
+    can share a slug (e.g. ``linear:greenhouse`` vs ``linear:ashby``).
     """
     hb = asyncio.create_task(_heartbeat(sf, job_id))
     try:
@@ -339,11 +339,18 @@ async def run_ingest_greenhouse_job(
                 await s.execute(select(Job).where(Job.id == job_id))
             ).scalar_one()
             payload: dict[str, Any] = job.payload or {}
+            source_name = payload["source"]
             slug = payload["company_slug"]
+
+            adapter = SOURCES.get(source_name)
+            if adapter is None:
+                raise ValueError(f"unknown source: {source_name!r}")
 
             company = (
                 await s.execute(
-                    select(Company).where(Company.slug == slug)
+                    select(Company).where(
+                        Company.slug == slug, Company.source == source_name
+                    )
                 )
             ).scalar_one_or_none()
             company_id = company.id if company else None
@@ -352,17 +359,21 @@ async def run_ingest_greenhouse_job(
             sf,
             job_id,
             phase="ingest_start",
-            message=f"Fetching {slug}",
-            data={"slug": slug},
+            message=f"Fetching {source_name}:{slug}",
+            data={"slug": slug, "source": source_name},
         )
         async with httpx.AsyncClient(timeout=30) as http:
-            postings = await fetch_company_jobs(slug, http=http)
+            postings = await adapter.fetch_company_postings(slug, http=http)
         await emit_event(
             sf,
             job_id,
             phase="ingest_fetched",
             message=f"Fetched {len(postings)} postings",
-            data={"count": len(postings), "slug": slug},
+            data={
+                "count": len(postings),
+                "slug": slug,
+                "source": source_name,
+            },
         )
 
         async with sf() as s:
@@ -370,7 +381,7 @@ async def run_ingest_greenhouse_job(
                 s,
                 user_id=1,
                 company_id=company_id,
-                source="greenhouse",
+                source=source_name,
                 postings=postings,
             )
 
@@ -410,7 +421,7 @@ async def run_ingest_greenhouse_job(
                 .values(
                     status="succeeded",
                     finished_at=datetime.now(timezone.utc),
-                    result={"slug": slug, **event_data},
+                    result={"slug": slug, "source": source_name, **event_data},
                 )
             )
             await s.commit()
@@ -451,6 +462,30 @@ async def run_ingest_greenhouse_job(
         hb.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await hb
+
+
+async def run_ingest_greenhouse_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Backwards-compat shim — promotes the legacy payload to the new shape.
+
+    The legacy ``{"company_slug": ...}`` payload is rewritten in place to
+    ``{"source": "greenhouse", "company_slug": ...}`` so the generalized
+    runner can consume it. This shim is dropped in slice 5 once the
+    scheduler stops enqueuing the legacy kind.
+    """
+    async with sf() as s:
+        job = (
+            await s.execute(select(Job).where(Job.id == job_id))
+        ).scalar_one()
+        payload: dict[str, Any] = dict(job.payload or {})
+        if payload.get("source") != "greenhouse":
+            payload["source"] = "greenhouse"
+            await s.execute(
+                update(Job).where(Job.id == job_id).values(payload=payload)
+            )
+            await s.commit()
+    await run_ingest_source_job(sf, job_id)
 
 
 async def run_classify_posting_job(
@@ -1607,6 +1642,9 @@ async def _fail_application(
 # does not update what gets dispatched.
 RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "tailor": run_tailor_job,
+    "ingest_source": run_ingest_source_job,
+    # Slice-4 Batch A compat: scheduler still enqueues this kind until
+    # Batch B Task 8 teaches it to use ingest_source. Drop in slice 5.
     "ingest_greenhouse": run_ingest_greenhouse_job,
     "classify_posting": run_classify_posting_job,
     "prepare_application": run_prepare_application_job,
