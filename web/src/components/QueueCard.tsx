@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Application, ApplicationDetail, api } from "../api";
 import Button from "./ui/Button";
 import PdfPreview from "./PdfPreview";
+import StatusPill, { type StatusKind } from "./ui/StatusPill";
+import TierBadge, { type Tier } from "./ui/TierBadge";
+import FitChip from "./ui/FitChip";
 
 interface Props {
   application: Application;
@@ -24,15 +27,14 @@ function fmtElapsed(iso: string | null): string {
   return `${days}d`;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  prepared: "#16a34a",
-  errored: "#dc2626",
-  submitting: "#2563eb",
-  submitted: "#6b7280",
-  pending: "#92400e",
-};
+const KNOWN_STATUSES: ReadonlySet<string> = new Set([
+  "queued", "running", "ok", "failed", "cancelled", "paused", "stuck",
+  "errored", "prepared", "submitted", "duplicate_skipped",
+]);
 
-export default function ApplicationCard({ application, onSubmit, onCancel, submitting, cancelling }: Props) {
+const KNOWN_TIERS: ReadonlySet<string> = new Set(["dream", "targeted", "wide", "skip"]);
+
+export default function QueueCard({ application, onSubmit, onCancel, submitting, cancelling }: Props) {
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,8 +83,12 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
   }, [detail?.resume_pdf_url]);
 
   const isErrored = application.status === "errored";
-  const statusColor = STATUS_COLORS[application.status] || "var(--ink-3)";
   const submitLabel = isErrored ? "Retry submit" : "Submit application";
+  const statusKind: StatusKind | null = KNOWN_STATUSES.has(application.status)
+    ? (application.status as StatusKind)
+    : null;
+  const tier = application.posting.tier;
+  const tierKind: Tier | null = tier && KNOWN_TIERS.has(tier) ? (tier as Tier) : null;
 
   const formEntries = detail?.form_payload
     ? Object.entries(detail.form_payload)
@@ -90,17 +96,17 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
 
   return (
     <article
-      data-testid="application-card"
+      data-testid="queue-card"
       data-application-id={application.id}
       style={{
         border: "1px solid var(--rule)",
         borderRadius: 4,
         background: "var(--paper)",
-        marginBottom: 16,
+        marginBottom: 12,
         overflow: "hidden",
       }}
     >
-      {/* Header */}
+      {/* Header — bundle-styled mono key/value strip with badges. */}
       <div style={{
         display: "flex",
         alignItems: "center",
@@ -110,30 +116,51 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         gap: 12,
         flexWrap: "wrap",
       }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>
             {application.posting.company || "Unknown"} · {application.posting.title}
           </div>
-          <div style={{ fontSize: 11.5, color: "var(--ink-3)", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <span>tier: {application.posting.tier || "—"}</span>
-            <span>fit: {application.posting.fit_score ?? "—"}</span>
+          <div
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 11,
+              color: "var(--ink-3)",
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
             {application.posting.location && <span>{application.posting.location}</span>}
+            <span>mode: {application.mode}</span>
             {detail?.prepared_at && <span>prepared {fmtElapsed(detail.prepared_at)} ago</span>}
+            {detail?.canonical_key && <span>{detail.canonical_key}</span>}
           </div>
         </div>
-        <span
-          style={{
-            fontSize: 11,
-            padding: "3px 8px",
-            borderRadius: 3,
-            border: `1px solid ${statusColor}`,
-            color: statusColor,
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {application.status}
-        </span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {tierKind && <TierBadge tier={tierKind} />}
+          {application.posting.fit_score != null && (
+            <FitChip score={application.posting.fit_score} />
+          )}
+          {statusKind ? (
+            <StatusPill status={statusKind} />
+          ) : (
+            <span
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                padding: "2px 7px",
+                border: "1px solid var(--rule-strong)",
+                borderRadius: 999,
+                color: "var(--ink-3)",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {application.status}
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -152,7 +179,7 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         <div role="alert" style={{
           fontSize: 12.5,
           padding: "8px 14px",
-          background: "color-mix(in oklch, #dc2626 10%, var(--paper))",
+          background: "color-mix(in oklch, var(--err) 10%, var(--paper))",
           color: "var(--ink)",
           borderBottom: "1px solid var(--rule)",
         }}>
@@ -165,11 +192,11 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         style={{
           display: "grid",
           gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-          minHeight: 360,
+          minHeight: 320,
         }}
-        className="application-card-body"
+        className="queue-card-body"
       >
-        <div data-testid="app-resume-pane" style={{ borderRight: "1px solid var(--rule)", minHeight: 360, background: "var(--paper-2)" }}>
+        <div data-testid="app-resume-pane" style={{ borderRight: "1px solid var(--rule)", minHeight: 320, background: "var(--paper-2)" }}>
           {loading ? (
             <div style={{ padding: 20, fontSize: 13, color: "var(--ink-3)" }}>Loading resume…</div>
           ) : pdfBlob ? (
@@ -301,12 +328,6 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         >
           {cancelling ? "Cancelling…" : "Cancel application"}
         </Button>
-        <div style={{ flex: 1 }} />
-        {detail?.canonical_key && (
-          <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)", alignSelf: "center" }}>
-            {detail.canonical_key}
-          </span>
-        )}
       </div>
     </article>
   );

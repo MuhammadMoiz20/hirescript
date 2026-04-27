@@ -7,7 +7,7 @@ import Profile from "./routes/Profile";
 import Knowledge from "./routes/Knowledge";
 import OnboardingChat from "./routes/OnboardingChat";
 import Inbox from "./routes/Inbox";
-import Applications from "./routes/Applications";
+import Queue from "./routes/Queue";
 import { Jobs } from "./routes/Jobs";
 import Overview from "./routes/Overview";
 import TopBar from "./components/suite/TopBar";
@@ -261,7 +261,7 @@ function StateApp() {
   ) : view === "inbox" ? (
     <Inbox onBack={goList} />
   ) : view === "applications" ? (
-    <Applications onBack={goList} />
+    <Queue onBack={goList} />
   ) : view === "dashboard" ? (
     <PlaceholderPane title="Dashboard" />
   ) : view === "tiers" ? (
