@@ -255,3 +255,34 @@ async def test_repair_overflow_omits_hints_block_when_none():
     user_prompt = fake_query.call_args.kwargs["prompt"]
     assert "Horizontal overflow" not in user_prompt
     assert "compiles to 2 pages" in user_prompt
+
+
+async def test_repair_prompt_mentions_snippet_field():
+    """The repair prompt must instruct the model to treat the ``snippet``
+    field on each overflow hint as the authoritative bullet to rewrite, and
+    to fit that bullet on one line."""
+    payload = '{"diff":"X","removed_terms":[],"rationale":"r"}'
+    msgs = [_assistant_message(payload)]
+    fake_query = MagicMock(return_value=_FakeAsyncIter(msgs))
+    hints = [
+        {
+            "overflow_pt": 12.0,
+            "line_start": 87,
+            "line_end": 87,
+            "snippet": "Optimized PostgreSQL via connection pooling, reducing p95...",
+        },
+    ]
+    with patch.object(agent_mod, "query", fake_query):
+        await repair_overflow(
+            current_latex="\\documentclass{article}\\begin{document}x\\end{document}",
+            last_diff="",
+            page_count=1,
+            protected_terms=["PostgreSQL"],
+            tier="haiku",
+            overflow_hints=hints,
+        )
+    options = fake_query.call_args.kwargs["options"]
+    user_prompt = fake_query.call_args.kwargs["prompt"]
+    flat = (options.system_prompt or "") + "\n" + user_prompt
+    assert "snippet" in flat.lower()
+    assert "one line" in flat.lower() or "single line" in flat.lower()

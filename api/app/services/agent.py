@@ -112,7 +112,11 @@ def _build_system_prompt(
         "- A bullet that overflows the right margin by even 1-2pt is a defect: "
         "it produces a wrapped second line with one or two orphaned words, "
         "which looks unprofessional and wastes vertical space. Tighten such "
-        "bullets so they fit cleanly on one line."
+        "bullets so they fit cleanly on one line.\n\n"
+        "When a hint includes a non-empty `snippet`, that string is the exact "
+        "bullet content that wrapped to a second visual line. Rewrite that "
+        "specific bullet to fit on one line while preserving protected terms; "
+        "leave other bullets alone unless they also have hints."
     )
 
 
