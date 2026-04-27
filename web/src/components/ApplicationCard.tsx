@@ -90,6 +90,8 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
 
   return (
     <article
+      data-testid="application-card"
+      data-application-id={application.id}
       style={{
         border: "1px solid var(--rule)",
         borderRadius: 4,
@@ -167,7 +169,7 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         }}
         className="application-card-body"
       >
-        <div style={{ borderRight: "1px solid var(--rule)", minHeight: 360, background: "var(--paper-2)" }}>
+        <div data-testid="app-resume-pane" style={{ borderRight: "1px solid var(--rule)", minHeight: 360, background: "var(--paper-2)" }}>
           {loading ? (
             <div style={{ padding: 20, fontSize: 13, color: "var(--ink-3)" }}>Loading resume…</div>
           ) : pdfBlob ? (
@@ -187,7 +189,7 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
               justifyContent: "space-between",
               marginBottom: 6,
             }}>
-              <h3 className="eyebrow" style={{ margin: 0 }}>Cover letter</h3>
+              <h3 data-testid="app-cover-letter-heading" className="eyebrow" style={{ margin: 0 }}>Cover letter</h3>
               <Button
                 size="sm"
                 variant="ghost"
@@ -282,6 +284,7 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         <Button
           size="sm"
           variant="primary"
+          data-testid="app-submit-btn"
           disabled={submitting || application.status === "submitted" || application.status === "submitting"}
           onClick={() => onSubmit(application.id)}
         >

@@ -43,6 +43,8 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
     <div
       role="button"
       tabIndex={0}
+      data-testid="posting-card"
+      data-posting-id={posting.id}
       onClick={() => onClick(posting.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -141,6 +143,7 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
         <Button
           size="sm"
           variant="primary"
+          data-testid="posting-prepare-btn"
           disabled={preparing || posting.status === "preparing" || posting.status === "prepared"}
           onClick={() => onPrepare(posting.id)}
         >

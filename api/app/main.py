@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models import User
 from app.routes import (
+    admin,
     applications,
     auth,
     jds,
@@ -44,6 +45,7 @@ app.include_router(kb.router)
 app.include_router(onboarding.router)
 app.include_router(postings.router)
 app.include_router(applications.router)
+app.include_router(admin.router)
 
 @app.get("/health")
 def health():
