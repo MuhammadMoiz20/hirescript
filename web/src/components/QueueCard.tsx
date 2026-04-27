@@ -48,6 +48,13 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set([
 
 const KNOWN_TIERS: ReadonlySet<string> = new Set(["dream", "targeted", "wide", "skip"]);
 
+const COVER_LETTER_LABELS: Record<NonNullable<Application["cover_letter_requirement"]>, string> = {
+  required: "Cover letter required",
+  optional: "Cover letter optional",
+  not_present: "No cover letter field",
+  unknown: "Cover letter unknown",
+};
+
 export default function QueueCard({
   application,
   onSubmit,
@@ -183,6 +190,23 @@ export default function QueueCard({
             </span>
           )}
           {tierKind && <TierBadge tier={tierKind} />}
+          {application.cover_letter_requirement && (
+            <span
+              data-testid="cover-letter-badge"
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                padding: "2px 7px",
+                border: "1px solid var(--rule-strong)",
+                borderRadius: 999,
+                color: "var(--ink-2)",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {COVER_LETTER_LABELS[application.cover_letter_requirement]}
+            </span>
+          )}
           {application.posting.fit_score != null && (
             <FitChip score={application.posting.fit_score} />
           )}

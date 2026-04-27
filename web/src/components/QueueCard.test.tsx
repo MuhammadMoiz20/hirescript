@@ -171,4 +171,24 @@ describe("QueueCard slice-3 surface", () => {
     const submit = await screen.findByTestId("app-submit-btn");
     expect(submit).toBeDisabled();
   });
+
+  test("renders 'Cover letter required' badge when cover_letter_requirement === 'required'", () => {
+    renderCard(app({ cover_letter_requirement: "required" }));
+    expect(screen.getByText(/cover letter required/i)).toBeInTheDocument();
+  });
+
+  test("renders 'No cover letter field' badge when cover_letter_requirement === 'not_present'", () => {
+    renderCard(app({ cover_letter_requirement: "not_present" }));
+    expect(screen.getByText(/no cover letter field/i)).toBeInTheDocument();
+  });
+
+  test("renders 'Cover letter optional' badge when cover_letter_requirement === 'optional'", () => {
+    renderCard(app({ cover_letter_requirement: "optional" }));
+    expect(screen.getByText(/cover letter optional/i)).toBeInTheDocument();
+  });
+
+  test("renders 'Cover letter unknown' badge when cover_letter_requirement === 'unknown'", () => {
+    renderCard(app({ cover_letter_requirement: "unknown" }));
+    expect(screen.getByText(/cover letter unknown/i)).toBeInTheDocument();
+  });
 });

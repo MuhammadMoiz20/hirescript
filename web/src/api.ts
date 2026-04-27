@@ -793,6 +793,8 @@ export type Application = {
   agent_session_id?: string | null;
   /** Slice 5: agent paused before final submit; user must confirm. */
   awaiting_user_confirmation?: boolean;
+  /** Cover-letter detection: requirement state derived from the posting form. */
+  cover_letter_requirement?: "required" | "optional" | "not_present" | "unknown";
 };
 
 export interface ApplicationResearch {
