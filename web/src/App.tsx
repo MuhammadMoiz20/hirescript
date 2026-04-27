@@ -10,6 +10,7 @@ import { Jobs } from "./routes/Jobs";
 import Overview from "./routes/Overview";
 import HistoryMassApply from "./routes/HistoryMassApply";
 import Dashboard from "./routes/Dashboard";
+import Tiers from "./routes/Tiers";
 import TopBar from "./components/suite/TopBar";
 import NavRail, { type NavKey } from "./components/suite/NavRail";
 import CommandPalette, { type CommandItem } from "./components/suite/CommandPalette";
@@ -256,7 +257,7 @@ function StateApp() {
   ) : view === "dashboard" ? (
     <Dashboard onBack={goOverview} navigateOverride={(p) => navigate(p)} />
   ) : view === "tiers" ? (
-    <PlaceholderPane title="Tiers" />
+    <Tiers onBack={goOverview} />
   ) : view === "settings" ? (
     <PlaceholderPane title="Settings" />
   ) : view === "history-massapply" ? (
