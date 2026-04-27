@@ -21,7 +21,7 @@ from app.services import jobs_runner
 from app.services.jobs_repo import (
     claim_one,
     count_submitted_today_for_tier,
-    enqueue_ingest_greenhouse,
+    enqueue_ingest_source,
     enqueue_submit_application,
     reclaim_stale_jobs,
 )
@@ -83,13 +83,18 @@ async def run_until_idle(
 
 
 async def _enqueue_due_ingests(sf) -> None:
-    """Enqueue an ``ingest_greenhouse`` job for every enabled company that
-    does not already have one queued or running.
+    """Enqueue an ``ingest_source`` job for every enabled ``(source, slug)``
+    pair that does not already have one queued or running.
 
-    JSONB ``->>`` works on Postgres but not SQLite; rather than branch on
-    dialect we filter inflight jobs in Python after pulling the small set
-    of queued/running ingest jobs. The cardinality is bounded by the
-    enabled-companies count so this is cheap.
+    Walks the entire ``companies`` table — no source is hardcoded — and
+    dispatches via :func:`enqueue_ingest_source`. The dedup set inspects
+    both the new ``ingest_source`` kind and the legacy
+    ``ingest_greenhouse`` kind (still emitted by Batch A's compat shim)
+    so a job already in flight from either path suppresses a duplicate
+    enqueue. JSONB ``->>`` works on Postgres but not SQLite; we filter
+    in Python after pulling the small set of inflight ingest jobs. The
+    cardinality is bounded by the enabled-companies count so this is
+    cheap.
     """
     async with sf() as s:
         enabled = (
@@ -101,19 +106,33 @@ async def _enqueue_due_ingests(sf) -> None:
         inflight = (
             await s.execute(
                 select(Job).where(
-                    Job.kind == "ingest_greenhouse",
+                    Job.kind.in_(("ingest_source", "ingest_greenhouse")),
                     Job.status.in_(("queued", "running")),
                 )
             )
         ).scalars().all()
-        inflight_slugs = {
-            (j.payload or {}).get("company_slug") for j in inflight
-        }
+        # Build a set of (source, slug) pairs already in flight. The
+        # legacy ``ingest_greenhouse`` kind has no ``source`` key in its
+        # payload — treat it as ``greenhouse`` so a legacy job suppresses
+        # a fresh ``(greenhouse, slug)`` enqueue.
+        inflight_pairs: set[tuple[str, str | None]] = set()
+        for j in inflight:
+            payload = j.payload or {}
+            slug = payload.get("company_slug")
+            if j.kind == "ingest_greenhouse":
+                inflight_pairs.add(("greenhouse", slug))
+            else:
+                inflight_pairs.add((payload.get("source"), slug))
 
         for c in enabled:
-            if c.slug in inflight_slugs:
+            if (c.source, c.slug) in inflight_pairs:
                 continue
-            await enqueue_ingest_greenhouse(s, company_slug=c.slug)
+            await enqueue_ingest_source(
+                s, source=c.source, company_slug=c.slug
+            )
+            # Track in-memory so the same tick doesn't double-enqueue if
+            # the companies table somehow lists the same pair twice.
+            inflight_pairs.add((c.source, c.slug))
         await s.commit()
 
 

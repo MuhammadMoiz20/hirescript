@@ -162,12 +162,100 @@ async def test_scheduler_enqueues_ingest_per_enabled_company(
     async with sessionmaker_factory() as s:
         jobs = (
             await s.execute(
-                select(Job).where(Job.kind == "ingest_greenhouse")
+                select(Job).where(Job.kind == "ingest_source")
             )
         ).scalars().all()
-        slugs = sorted((j.payload or {}).get("company_slug") for j in jobs)
-        assert slugs == ["a", "b"]
+        payloads = sorted(
+            (
+                (j.payload or {}).get("source"),
+                (j.payload or {}).get("company_slug"),
+            )
+            for j in jobs
+        )
+        assert payloads == [("greenhouse", "a"), ("greenhouse", "b")]
         assert all(j.status == "queued" for j in jobs)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_enqueues_ingest_for_every_source(
+    sessionmaker_factory,
+):
+    """Two greenhouse + one lever + one ashby company yields four
+    ``ingest_source`` jobs on a single tick; a re-tick adds none.
+    """
+    from app.worker import _enqueue_due_ingests
+
+    async with sessionmaker_factory() as s:
+        s.add(Company(slug="g1", display_name="G1", source="greenhouse", enabled=True))
+        s.add(Company(slug="g2", display_name="G2", source="greenhouse", enabled=True))
+        s.add(Company(slug="l1", display_name="L1", source="lever", enabled=True))
+        s.add(Company(slug="a1", display_name="A1", source="ashby", enabled=True))
+        s.add(Company(slug="dis", display_name="Dis", source="workable", enabled=False))
+        await s.commit()
+
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        pairs = sorted(
+            (
+                (j.payload or {}).get("source"),
+                (j.payload or {}).get("company_slug"),
+            )
+            for j in jobs
+        )
+        assert pairs == [
+            ("ashby", "a1"),
+            ("greenhouse", "g1"),
+            ("greenhouse", "g2"),
+            ("lever", "l1"),
+        ]
+
+    # Second tick must not duplicate any (source, slug) pair.
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        assert len(jobs) == 4
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dedups_against_legacy_ingest_greenhouse_kind(
+    sessionmaker_factory,
+):
+    """Backwards compat — a legacy ``ingest_greenhouse`` job in flight
+    for ``(greenhouse, x)`` must suppress a fresh enqueue."""
+    from app.worker import _enqueue_due_ingests
+
+    async with sessionmaker_factory() as s:
+        s.add(Company(slug="x", display_name="X", source="greenhouse", enabled=True))
+        s.add(
+            Job(
+                kind="ingest_greenhouse",
+                status="queued",
+                payload={"company_slug": "x"},
+            )
+        )
+        await s.commit()
+
+    await _enqueue_due_ingests(sessionmaker_factory)
+
+    async with sessionmaker_factory() as s:
+        new_jobs = (
+            await s.execute(
+                select(Job).where(Job.kind == "ingest_source")
+            )
+        ).scalars().all()
+        # Legacy in-flight job suppresses the new ingest_source enqueue.
+        assert new_jobs == []
 
 
 async def _seed_amode_app(
@@ -405,9 +493,9 @@ async def test_scheduler_skips_companies_with_in_flight_ingest(
         # Pre-existing queued ingest for "a" — scheduler must skip it.
         s.add(
             Job(
-                kind="ingest_greenhouse",
+                kind="ingest_source",
                 status="queued",
-                payload={"company_slug": "a"},
+                payload={"source": "greenhouse", "company_slug": "a"},
             )
         )
         await s.commit()
@@ -417,7 +505,9 @@ async def test_scheduler_skips_companies_with_in_flight_ingest(
     async with sessionmaker_factory() as s:
         jobs = (
             await s.execute(
-                select(Job).where(Job.kind == "ingest_greenhouse")
+                select(Job).where(
+                    Job.kind.in_(("ingest_source", "ingest_greenhouse"))
+                )
             )
         ).scalars().all()
         slugs_per_job = [(j.payload or {}).get("company_slug") for j in jobs]
