@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply — Lever</title></head>
+<body>
+<form id="application_form" action="/submitted" method="post" enctype="multipart/form-data">
+  <input id="name" name="name" />
+  <input id="email" name="email" type="email" />
+  <input id="resume" type="file" name="resume" />
+  <button type="submit" data-qa="btn-submit">Submit application</button>
+</form>
+<script>
+  document.getElementById('application_form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const wrap = document.createElement('div');
+    wrap.innerHTML =
+      '<h2>Please verify you are human</h2>' +
+      '<iframe src="https://www.google.com/recaptcha/api.html" ' +
+      'title="reCAPTCHA challenge" width="300" height="200"></iframe>';
+    document.body.appendChild(wrap);
+  });
+</script>
+</body>
+</html>
