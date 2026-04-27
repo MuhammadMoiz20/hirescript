@@ -223,3 +223,35 @@ def test_compile_no_wrap_hint_for_short_resume_item():
     result = compile_latex(src)
     assert result.page_count == 1
     assert all("Short bullet" not in h.snippet for h in result.overflows)
+
+
+def test_compile_emits_wrap_hint_for_long_skill_row():
+    src = textwrap.dedent(r"""
+    \documentclass[letterpaper,10pt]{article}
+    \usepackage[margin=0.5in]{geometry}
+    \usepackage{enumitem}
+    \begin{document}
+    \begin{itemize}[leftmargin=0.15in, label={}]
+      \small{\item{
+        \skillRow{Frameworks}{React, Next.js, Node.js, FastAPI, PyTorch, TensorFlow, gRPC, GraphQL, Express, NestJS, Django, Flask, Spring Boot}
+      }}
+    \end{itemize}
+    \end{document}
+    """).strip()
+    result = compile_latex(src)
+    assert result.page_count == 1
+    wrap = next((h for h in result.overflows
+                 if "Frameworks" in h.snippet), None)
+    assert wrap is not None, f"expected skill-row wrap, got {result.overflows!r}"
+
+
+def test_compile_no_wrap_for_minimal_doc_without_resume_macros():
+    src = textwrap.dedent(r"""
+    \documentclass{article}
+    \begin{document}
+    Hello world.
+    \end{document}
+    """).strip()
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert result.overflows == ()
