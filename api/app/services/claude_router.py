@@ -1,23 +1,16 @@
 """Claude client/model dispatcher.
 
-Routes Anthropic calls between two clients:
+All Anthropic traffic goes through the **Max** client (Agent SDK; the local
+``claude`` CLI auth backs ``claude_agent_sdk.query``). The legacy API-key
+client has been removed — we no longer require ``ANTHROPIC_API_KEY``.
 
-- The **Max** client (Agent SDK; ``claude_agent_sdk.query``) — preferred for
-  long-running model traffic that fits inside the user's Claude Max plan
-  five-hour window.
-- The **API-key** client (``anthropic.AsyncAnthropic``) — used for short
-  utility calls (classify, cover_letter, verify) and as the overflow path
-  when Max is saturated.
-
-Routing decisions are intentionally simple and live in :func:`choose`. The
-caller fetches the actual SDK client via :func:`get_max_client` /
-:func:`get_api_client`. After every call the caller is expected to invoke
-:func:`record_usage` so the rolling window load stays accurate.
+Routing decisions live in :func:`choose`. The caller fetches the actual SDK
+client via :func:`get_max_client`. After every call the caller is expected
+to invoke :func:`record_usage` so the rolling window load stays observable.
 
 This module is the single source of truth for "which model do we hit for
-which task" and for the Max-vs-API split. Existing services (``classify``,
-``tailor``, ``cover_letter``, ``verify``) call into here so we can re-tune
-the policy from one place.
+which task". Existing services (``classify``, ``tailor``, ``cover_letter``,
+``verify``) call into here so we can re-tune the policy from one place.
 """
 
 from __future__ import annotations
@@ -55,7 +48,6 @@ _HAIKU_MODEL = "claude-haiku-4-5"
 _SONNET_MODEL = "claude-sonnet-4-6"
 
 _DEFAULT_MAX_WINDOW_BUDGET = 4_000_000
-_MAX_WINDOW_FALLBACK_THRESHOLD = 0.85
 
 
 class ClientChoice(TypedDict):
@@ -64,28 +56,21 @@ class ClientChoice(TypedDict):
 
 
 class WindowExhaustedError(RuntimeError):
-    """Raised when a task that has no fallback path runs into a saturated Max window."""
+    """Retained for backward compatibility. No longer raised by :func:`choose`
+    now that all tasks route through Max unconditionally."""
 
 
 # --- lazy SDK client singletons -----------------------------------------------
 
-_api_client_singleton = None
-
 
 def get_api_client():
-    """Return a process-global ``anthropic.AsyncAnthropic`` instance.
-
-    Lazily constructed so importing this module never requires an API key —
-    only callers that actually dispatch through the API client need one.
+    """Removed. Kept as an importable symbol so any straggler that still tries
+    to dispatch through an API-key client fails loudly at call time rather
+    than at import time.
     """
-    global _api_client_singleton
-    if _api_client_singleton is None:
-        import anthropic  # local import: keep module-import cheap
-
-        _api_client_singleton = anthropic.AsyncAnthropic(
-            api_key=os.environ["ANTHROPIC_API_KEY"]
-        )
-    return _api_client_singleton
+    raise RuntimeError(
+        "API-key client removed; all calls go through Max via Agent SDK"
+    )
 
 
 def get_max_client():
@@ -136,7 +121,8 @@ async def max_window_load(db: AsyncSession) -> float:
     Sums ``input_tokens + output_tokens`` from rows in ``claude_usage`` where
     ``client='max'`` and ``started_at >= now() - 5 hours``. Divides by the
     ``MAX_WINDOW_TOKEN_BUDGET`` env var (default 4_000_000). Result is clamped
-    to ``[0.0, 1.0]`` so a callers can compare against fixed thresholds.
+    to ``[0.0, 1.0]`` for observability — :func:`choose` no longer routes on
+    this value, but callers/dashboards may still consult it.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=5)
     stmt = select(
@@ -184,36 +170,25 @@ async def choose(
 ) -> ClientChoice:
     """Pick the (client, model) pair for a task.
 
-    Routing rules:
+    All tasks now run on Max via the Agent SDK. Routing rules:
 
-    - ``classify``, ``cover_letter``, ``verify`` → API-key Haiku.
-    - ``tailor`` → Max + per-tier model under budget; API-key Sonnet over
-      ``_MAX_WINDOW_FALLBACK_THRESHOLD``.
-    - ``research`` → Max + Sonnet under budget; raises
-      :class:`WindowExhaustedError` over budget (no fallback).
+    - ``classify``, ``cover_letter``, ``verify`` → Max + Haiku 4.5.
+    - ``tailor`` → Max + per-tier model (Sonnet default).
+    - ``research`` → Max + Sonnet.
     """
     if task_kind not in _VALID_TASK_KINDS:
         raise ValueError(f"unknown task_kind: {task_kind!r}")
 
     if task_kind in ("classify", "cover_letter", "verify"):
-        return ClientChoice(client="api", model=_HAIKU_MODEL)
+        return ClientChoice(client="max", model=_HAIKU_MODEL)
 
     if task_kind == "tailor":
-        load = await max_window_load(db)
-        if load > _MAX_WINDOW_FALLBACK_THRESHOLD:
-            return ClientChoice(client="api", model=_SONNET_MODEL)
         return ClientChoice(
             client="max",
             model=await _tailor_model_for_tier(db, tier_slug),
         )
 
     # research
-    load = await max_window_load(db)
-    if load > _MAX_WINDOW_FALLBACK_THRESHOLD:
-        raise WindowExhaustedError(
-            f"max window load {load:.2f} exceeds threshold "
-            f"{_MAX_WINDOW_FALLBACK_THRESHOLD}"
-        )
     return ClientChoice(client="max", model=_SONNET_MODEL)
 
 

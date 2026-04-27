@@ -7,9 +7,6 @@ KB notes. It never edits the materials — only returns a verdict.
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
 import pytest
 from sqlalchemy import select
 
@@ -102,43 +99,30 @@ async def _seed_world(db_session) -> int:
     return app.id
 
 
-def _fake_anthropic_response(payload: dict) -> SimpleNamespace:
-    """Build a minimal stand-in for ``anthropic.types.Message``."""
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=json.dumps(payload))],
-        usage=SimpleNamespace(input_tokens=42, output_tokens=7),
-    )
+def _stub_query_json(monkeypatch, payload):
+    """Patch ``verify.query_json`` to return a fixed payload (or raise).
 
+    ``payload`` may be a dict (returned), an Exception (raised), or a callable
+    receiving the kwargs and returning a value.
+    """
+    async def _fake(**kwargs):
+        if isinstance(payload, Exception):
+            raise payload
+        if callable(payload):
+            return payload(**kwargs)
+        return payload
 
-class _FakeMessages:
-    def __init__(self, response):
-        self._response = response
-        self.calls: list[dict] = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if isinstance(self._response, Exception):
-            raise self._response
-        if callable(self._response):
-            return self._response(**kwargs)
-        return self._response
-
-
-class _FakeApiClient:
-    def __init__(self, response):
-        self.messages = _FakeMessages(response)
+    monkeypatch.setattr(verify, "query_json", _fake)
 
 
 @pytest.mark.asyncio
 async def test_verify_application_returns_ok_true(monkeypatch, db_session):
     application_id = await _seed_world(db_session)
 
-    fake = _FakeApiClient(
-        _fake_anthropic_response(
-            {"ok": True, "issues": [], "rationale": "All grounded."}
-        )
+    _stub_query_json(
+        monkeypatch,
+        {"ok": True, "issues": [], "rationale": "All grounded."},
     )
-    monkeypatch.setattr(verify, "get_api_client", lambda: fake)
 
     async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
         return [{"text": "I worked with Rust at $previous", "source": "notes", "title": "x"}]
@@ -159,16 +143,14 @@ async def test_verify_application_propagates_ok_false(
 ):
     application_id = await _seed_world(db_session)
 
-    fake = _FakeApiClient(
-        _fake_anthropic_response(
-            {
-                "ok": False,
-                "issues": ["Claims PhD but no PhD in profile."],
-                "rationale": "One unsupported claim found.",
-            }
-        )
+    _stub_query_json(
+        monkeypatch,
+        {
+            "ok": False,
+            "issues": ["Claims PhD but no PhD in profile."],
+            "rationale": "One unsupported claim found.",
+        },
     )
-    monkeypatch.setattr(verify, "get_api_client", lambda: fake)
 
     async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
         return []
@@ -188,12 +170,7 @@ async def test_verify_application_invalid_json_raises(
 ):
     application_id = await _seed_world(db_session)
 
-    bad = SimpleNamespace(
-        content=[SimpleNamespace(type="text", text="not json at all")],
-        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
-    )
-    fake = _FakeApiClient(bad)
-    monkeypatch.setattr(verify, "get_api_client", lambda: fake)
+    _stub_query_json(monkeypatch, AgentError("invalid JSON: bad; got xxx"))
 
     async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
         return []
@@ -212,12 +189,10 @@ async def test_verify_application_uses_router_with_verify_kind(
 ):
     application_id = await _seed_world(db_session)
 
-    fake = _FakeApiClient(
-        _fake_anthropic_response(
-            {"ok": True, "issues": [], "rationale": "ok"}
-        )
+    _stub_query_json(
+        monkeypatch,
+        {"ok": True, "issues": [], "rationale": "ok"},
     )
-    monkeypatch.setattr(verify, "get_api_client", lambda: fake)
 
     async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
         return []

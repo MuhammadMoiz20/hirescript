@@ -26,8 +26,7 @@ from app.models import (
     Resume,
 )
 from app.services import claude_router, kb_ingest
-from app.services.agent import AgentError
-from app.services.claude_router import get_api_client
+from app.services.agent import AgentError, query_json
 
 
 log = logging.getLogger(__name__)
@@ -61,18 +60,6 @@ def _format_kb_chunks(chunks: list[dict[str, Any]]) -> str:
         title = c.get("title", "untitled")
         lines.append(f"--- chunk {i} (source={source}, title={title}) ---\n{text}")
     return "\n".join(lines) if lines else "(no KB notes available)"
-
-
-def _extract_text(message_obj: Any) -> str:
-    """Pull the concatenated text from an Anthropic ``messages.create`` response."""
-    blocks = getattr(message_obj, "content", None) or []
-    parts: list[str] = []
-    for b in blocks:
-        # The Anthropic SDK exposes blocks with ``.type`` and ``.text``.
-        text = getattr(b, "text", None)
-        if isinstance(text, str):
-            parts.append(text)
-    return "".join(parts)
 
 
 async def verify_application(
@@ -127,35 +114,20 @@ async def verify_application(
     )
 
     choice = await claude_router.choose(db, task_kind="verify")
-    client = get_api_client()
-    response = await client.messages.create(
-        model=choice["model"],
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+    parsed = await query_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        tier="haiku",
     )
-
-    usage = getattr(response, "usage", None)
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     await claude_router.record_usage(
         db,
         client=choice["client"],
         model=choice["model"],
         task_kind="verify",
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
+        input_tokens=0,
+        output_tokens=0,
     )
 
-    raw = _extract_text(response).strip()
-    if not raw:
-        raise AgentError("verify_application: model returned no text")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise AgentError(
-            f"verify_application: invalid JSON: {exc}; got {raw[:200]}"
-        ) from exc
     if not isinstance(parsed, dict):
         raise AgentError("verify_application: response must be a JSON object")
     ok = parsed.get("ok")

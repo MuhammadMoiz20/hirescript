@@ -110,7 +110,7 @@ async def test_cover_letter_includes_kb_chunks_in_prompt(monkeypatch, db_session
     ).scalars().all()
     assert len(usage) == 1
     assert usage[0].task_kind == "cover_letter"
-    assert usage[0].client == "api"
+    assert usage[0].client == "max"
 
 
 @pytest.mark.asyncio

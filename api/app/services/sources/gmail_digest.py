@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import email
 import hashlib
-import json
 import logging
 import os
 from email import policy
@@ -36,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import JobPosting
 from app.services import claude_router
-from app.services.claude_router import get_api_client
+from app.services.agent import AgentError, query_json
 from app.services.sources import SOURCES
 
 log = logging.getLogger(__name__)
@@ -185,15 +184,6 @@ async def mark_seen(uid: str) -> None:
 # --- Extract (Haiku) --------------------------------------------------------
 
 
-def _extract_text(response: Any) -> str:
-    """Concatenate text blocks from an Anthropic response."""
-    parts: list[str] = []
-    for blk in getattr(response, "content", []) or []:
-        if getattr(blk, "type", None) == "text":
-            parts.append(getattr(blk, "text", "") or "")
-    return "".join(parts)
-
-
 async def extract_postings(
     db: AsyncSession, *, html_body: str
 ) -> list[dict]:
@@ -205,37 +195,28 @@ async def extract_postings(
     than raising — one bad email shouldn't kill the digest tick).
     """
     choice = await claude_router.choose(db, task_kind="classify")
-    client = get_api_client()
-    response = await client.messages.create(
-        model=choice["model"],
-        max_tokens=2048,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": html_body or ""}],
-    )
+    try:
+        parsed = await query_json(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=html_body or "",
+            tier="haiku",
+        )
+    except AgentError as exc:
+        log.warning("gmail_digest: model returned non-JSON: %s", exc)
+        return []
 
-    usage = getattr(response, "usage", None)
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     try:
         await claude_router.record_usage(
             db,
             client=choice["client"],
             model=choice["model"],
             task_kind="classify",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            input_tokens=0,
+            output_tokens=0,
         )
     except Exception:  # noqa: BLE001
         log.exception("gmail_digest: record_usage failed")
 
-    raw = _extract_text(response).strip()
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning("gmail_digest: model returned non-JSON: %r", raw[:200])
-        return []
     if not isinstance(parsed, dict):
         return []
     postings = parsed.get("postings")

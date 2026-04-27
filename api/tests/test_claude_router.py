@@ -57,24 +57,24 @@ async def _seed_tiers(db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_classify_picks_api_haiku(db_session):
+async def test_classify_picks_max_haiku(db_session):
     await _seed_tiers(db_session)
     choice = await claude_router.choose(db_session, task_kind="classify")
-    assert choice == {"client": "api", "model": "claude-haiku-4-5"}
+    assert choice == {"client": "max", "model": "claude-haiku-4-5"}
 
 
 @pytest.mark.asyncio
-async def test_cover_letter_picks_api_haiku(db_session):
+async def test_cover_letter_picks_max_haiku(db_session):
     await _seed_tiers(db_session)
     choice = await claude_router.choose(db_session, task_kind="cover_letter")
-    assert choice == {"client": "api", "model": "claude-haiku-4-5"}
+    assert choice == {"client": "max", "model": "claude-haiku-4-5"}
 
 
 @pytest.mark.asyncio
-async def test_verify_picks_api_haiku(db_session):
+async def test_verify_picks_max_haiku(db_session):
     await _seed_tiers(db_session)
     choice = await claude_router.choose(db_session, task_kind="verify")
-    assert choice == {"client": "api", "model": "claude-haiku-4-5"}
+    assert choice == {"client": "max", "model": "claude-haiku-4-5"}
 
 
 @pytest.mark.asyncio
@@ -99,9 +99,11 @@ async def test_tailor_under_budget_uses_max_with_tier_model(
 
 
 @pytest.mark.asyncio
-async def test_tailor_over_budget_falls_back_to_api_sonnet(
+async def test_tailor_over_budget_still_uses_max(
     db_session, monkeypatch
 ):
+    """All tasks now route through Max regardless of window load — the
+    API-key fallback was removed when we deleted ``get_api_client``."""
     await _seed_tiers(db_session)
 
     async def fake_load(_db):
@@ -111,7 +113,7 @@ async def test_tailor_over_budget_falls_back_to_api_sonnet(
     choice = await claude_router.choose(
         db_session, task_kind="tailor", tier_slug="targeted"
     )
-    assert choice == {"client": "api", "model": "claude-sonnet-4-6"}
+    assert choice == {"client": "max", "model": "claude-sonnet-4-6"}
 
 
 @pytest.mark.asyncio
@@ -139,15 +141,17 @@ async def test_research_under_budget(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_research_over_budget_raises(db_session, monkeypatch):
+async def test_research_over_budget_still_uses_max(db_session, monkeypatch):
+    """Research tasks no longer raise WindowExhaustedError — Max is the only
+    client, so they always get routed to Max + Sonnet."""
     await _seed_tiers(db_session)
 
     async def fake_load(_db):
         return 0.9
 
     monkeypatch.setattr(claude_router, "max_window_load", fake_load)
-    with pytest.raises(claude_router.WindowExhaustedError):
-        await claude_router.choose(db_session, task_kind="research")
+    choice = await claude_router.choose(db_session, task_kind="research")
+    assert choice == {"client": "max", "model": "claude-sonnet-4-6"}
 
 
 @pytest.mark.asyncio

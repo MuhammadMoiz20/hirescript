@@ -105,7 +105,7 @@ async def test_classify_posting_writes_tier_and_score(monkeypatch, db_session):
     ).scalars().all()
     assert len(usage) == 1
     assert usage[0].task_kind == "classify"
-    assert usage[0].client == "api"
+    assert usage[0].client == "max"
     assert usage[0].model == "claude-haiku-4-5"
 
 

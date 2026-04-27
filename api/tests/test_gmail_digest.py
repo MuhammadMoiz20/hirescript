@@ -6,8 +6,8 @@ The module has three concerns we exercise independently:
    ``aioimaplib`` end-to-end (it's gnarly); instead we monkeypatch the
    helper directly to return a fixture list, since the orchestrator
    calls it through the module name.
-2. ``extract_postings`` (Haiku call) — mocked via the same
-   ``get_api_client`` pattern as :mod:`test_verify`.
+2. ``extract_postings`` (Haiku call) — mocked by stubbing
+   ``gmail_digest.query_json`` to return a fixed payload.
 3. ``poll_and_ingest`` — the orchestrator. Asserts: zero-postings
    email is a no-op; multi-posting email creates multiple rows;
    duplicate apply_url across runs collapses via the upsert;
@@ -16,9 +16,6 @@ The module has three concerns we exercise independently:
 """
 
 from __future__ import annotations
-
-import json
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -30,33 +27,22 @@ from app.services.sources import gmail_digest
 # --- Fakes ------------------------------------------------------------------
 
 
-def _fake_response(payload: dict) -> SimpleNamespace:
-    """Stand-in for ``anthropic.types.Message``."""
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text=json.dumps(payload))],
-        usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-    )
+def _stub_query_json(monkeypatch, payloads):
+    """Patch ``gmail_digest.query_json`` to return fixed payload(s).
 
+    ``payloads`` may be a single dict (returned every call) or a list (one per
+    successive call; the last value is reused if calls exceed the list).
+    """
+    state = {"idx": 0}
 
-class _FakeMessages:
-    def __init__(self, responses):
-        # ``responses`` may be a single value or a list (one per call).
-        self._responses = responses
-        self._idx = 0
-        self.calls: list[dict] = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if isinstance(self._responses, list):
-            r = self._responses[min(self._idx, len(self._responses) - 1)]
-            self._idx += 1
+    async def _fake(**kwargs):
+        if isinstance(payloads, list):
+            r = payloads[min(state["idx"], len(payloads) - 1)]
+            state["idx"] += 1
             return r
-        return self._responses
+        return payloads
 
-
-class _FakeApiClient:
-    def __init__(self, responses):
-        self.messages = _FakeMessages(responses)
+    monkeypatch.setattr(gmail_digest, "query_json", _fake)
 
 
 async def _ensure_user(db) -> None:
@@ -73,21 +59,19 @@ async def _ensure_user(db) -> None:
 
 @pytest.mark.asyncio
 async def test_extract_postings_returns_list(monkeypatch, db_session):
-    fake = _FakeApiClient(
-        _fake_response(
-            {
-                "postings": [
-                    {
-                        "company": "Anthropic",
-                        "title": "Backend Engineer",
-                        "apply_url": "https://boards.greenhouse.io/anthropic/jobs/1",
-                        "location": "Remote",
-                    }
-                ]
-            }
-        )
+    _stub_query_json(
+        monkeypatch,
+        {
+            "postings": [
+                {
+                    "company": "Anthropic",
+                    "title": "Backend Engineer",
+                    "apply_url": "https://boards.greenhouse.io/anthropic/jobs/1",
+                    "location": "Remote",
+                }
+            ]
+        },
     )
-    monkeypatch.setattr(gmail_digest, "get_api_client", lambda: fake)
 
     out = await gmail_digest.extract_postings(
         db_session, html_body="<html>blah</html>"
@@ -100,8 +84,7 @@ async def test_extract_postings_returns_list(monkeypatch, db_session):
 
 @pytest.mark.asyncio
 async def test_extract_postings_empty_email(monkeypatch, db_session):
-    fake = _FakeApiClient(_fake_response({"postings": []}))
-    monkeypatch.setattr(gmail_digest, "get_api_client", lambda: fake)
+    _stub_query_json(monkeypatch, {"postings": []})
 
     out = await gmail_digest.extract_postings(
         db_session, html_body="<html>nothing here</html>"
@@ -146,27 +129,25 @@ async def test_poll_and_ingest_creates_multiple_postings_per_email(
     monkeypatch.setattr(gmail_digest, "fetch_unread_emails", _emails)
     monkeypatch.setattr(gmail_digest, "mark_seen", _mark_seen)
 
-    fake = _FakeApiClient(
-        _fake_response(
-            {
-                "postings": [
-                    {
-                        "company": "Anthropic",
-                        "title": "Backend Engineer",
-                        "apply_url": "https://boards.greenhouse.io/anthropic/jobs/1",
-                        "location": "Remote",
-                    },
-                    {
-                        "company": "Notion",
-                        "title": "Frontend",
-                        "apply_url": "https://example.com/notion/jobs/2",
-                        "location": "SF",
-                    },
-                ]
-            }
-        )
+    _stub_query_json(
+        monkeypatch,
+        {
+            "postings": [
+                {
+                    "company": "Anthropic",
+                    "title": "Backend Engineer",
+                    "apply_url": "https://boards.greenhouse.io/anthropic/jobs/1",
+                    "location": "Remote",
+                },
+                {
+                    "company": "Notion",
+                    "title": "Frontend",
+                    "apply_url": "https://example.com/notion/jobs/2",
+                    "location": "SF",
+                },
+            ]
+        },
     )
-    monkeypatch.setattr(gmail_digest, "get_api_client", lambda: fake)
 
     n = await gmail_digest.poll_and_ingest(db_session, user_id=1)
     assert n == 2
@@ -207,20 +188,18 @@ async def test_poll_and_ingest_duplicate_apply_url_collapses(
 
     monkeypatch.setattr(gmail_digest, "mark_seen", _mark_seen)
 
-    fake = _FakeApiClient(
-        _fake_response(
-            {
-                "postings": [
-                    {
-                        "company": "X",
-                        "title": "T",
-                        "apply_url": "https://example.com/jobs/dup",
-                    }
-                ]
-            }
-        )
+    _stub_query_json(
+        monkeypatch,
+        {
+            "postings": [
+                {
+                    "company": "X",
+                    "title": "T",
+                    "apply_url": "https://example.com/jobs/dup",
+                }
+            ]
+        },
     )
-    monkeypatch.setattr(gmail_digest, "get_api_client", lambda: fake)
 
     n1 = await gmail_digest.poll_and_ingest(db_session, user_id=1)
     assert n1 == 1
