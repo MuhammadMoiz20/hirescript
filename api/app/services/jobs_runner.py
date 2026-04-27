@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -882,7 +884,6 @@ async def _resolve_resume_pdf(
             f"no ResumeVersion for resume_id={resume_id}"
         )
 
-    import os
     from app.services.storage import get_pdf
 
     os.makedirs(dest_dir, exist_ok=True)
@@ -950,7 +951,23 @@ def _build_submit_context(
     }
 
 
-_CONFIRMATION_HTML_LIMIT = 64 * 1024
+_CONFIRMATION_HTML_MAX = 65536
+_CONFIRMATION_HTML_MARKER = "\n<!-- [truncated at 64KiB] -->"
+
+
+def _truncate_confirmation(html: str) -> str:
+    """Cap ``confirmation_html`` to 64KiB and append a visible marker.
+
+    The marker tells anyone reading the raw HTML in the review queue that
+    the prefix is incomplete — silent truncation would let a reviewer
+    chase a missing closing tag they can't fix.
+    """
+    if len(html) <= _CONFIRMATION_HTML_MAX:
+        return html
+    return (
+        html[: _CONFIRMATION_HTML_MAX - len(_CONFIRMATION_HTML_MARKER)]
+        + _CONFIRMATION_HTML_MARKER
+    )
 
 
 async def run_submit_application_job(
@@ -974,9 +991,6 @@ async def run_submit_application_job(
        application ``errored`` + populate ``error``; mark job ``failed``.
        The row stays in the queue for human investigation.
     """
-    import os
-    import tempfile
-
     hb = asyncio.create_task(_heartbeat(sf, job_id))
     application_id: int | None = None
     try:
@@ -1103,9 +1117,9 @@ async def run_submit_application_job(
             )
 
         # 5. Persist artifacts + flip terminal state.
-        confirmation_html = result["confirmation_html"]
-        if len(confirmation_html) > _CONFIRMATION_HTML_LIMIT:
-            confirmation_html = confirmation_html[:_CONFIRMATION_HTML_LIMIT]
+        confirmation_html = _truncate_confirmation(
+            result["confirmation_html"]
+        )
 
         async with sf() as s:
             await s.execute(
@@ -1161,6 +1175,60 @@ async def run_submit_application_job(
             job_id=job_id,
             error=f"missing field: {exc.field}",
         )
+
+    except greenhouse_submit.ConfirmationTimeoutError as exc:
+        # The submit click MAY have succeeded server-side. Persist the
+        # captured artifacts so a human can verify in the review queue,
+        # but mark the row as errored with a descriptive message.
+        error_msg = (
+            "confirmation timeout (submit may have succeeded — "
+            f"verify manually): url={exc.url} title={exc.title}"
+        )
+        if application_id is not None:
+            try:
+                async with sf() as s:
+                    await s.execute(
+                        update(Application)
+                        .where(Application.id == application_id)
+                        .values(
+                            status="errored",
+                            error=error_msg[:500],
+                            confirmation_html=_truncate_confirmation(
+                                exc.confirmation_html or ""
+                            ),
+                            confirmation_screenshot_path=exc.screenshot_path,
+                        )
+                    )
+                    await s.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to persist confirmation-timeout artifacts "
+                    "for application %s",
+                    application_id,
+                )
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="failed",
+                        finished_at=datetime.now(timezone.utc),
+                        result={"error": error_msg[:500]},
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="failed",
+                message=error_msg[:500],
+                data={"error": error_msg[:500]},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal failure handler failed for job %s", job_id
+            )
 
     except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
         await _fail_application(

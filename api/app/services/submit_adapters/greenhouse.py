@@ -13,6 +13,9 @@ Progress events are emitted through an optional async ``on_progress`` callback.
 The phase names (``nav_to_form``, ``filling_field``, ``uploaded_resume``,
 ``submitting``, ``confirmed``) are stable; the runner re-emits them as
 :class:`JobEvent` rows for SSE consumers.
+
+Adapter wall-clock budget per submit: ~90s (30s navigation + 60s confirmation
++ small fill cost). The runner should provision queue capacity accordingly.
 """
 
 from __future__ import annotations
@@ -50,6 +53,27 @@ class MissingFieldError(Exception):
     def __init__(self, field: str) -> None:
         super().__init__(f"missing field: {field}")
         self.field = field
+
+
+class ConfirmationTimeoutError(Exception):
+    """Raised when the submit click succeeded but no confirmation signal was
+    detected within the timeout. The submit MAY have actually succeeded —
+    artifacts are captured so a human can verify."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: str,
+        title: str,
+        confirmation_html: str,
+        screenshot_path: str,
+    ) -> None:
+        super().__init__(message)
+        self.url = url
+        self.title = title
+        self.confirmation_html = confirmation_html
+        self.screenshot_path = screenshot_path
 
 
 # Single source of truth for Greenhouse field locators. Each entry is an
@@ -176,7 +200,10 @@ async def submit(
     """
     # Imported lazily so unit tests that don't exercise the adapter (and dev
     # environments without Chromium installed) can still import this module.
-    from playwright.async_api import async_playwright
+    from playwright.async_api import (
+        TimeoutError as PlaywrightTimeoutError,
+        async_playwright,
+    )
 
     out_dir = screenshot_dir or _DEFAULT_SCREENSHOT_DIR
     os.makedirs(out_dir, exist_ok=True)
@@ -266,37 +293,70 @@ async def submit(
 
             # 6. Wait for confirmation heuristic: URL contains 'success' or
             # 'applied', OR page text contains a thank-you phrase.
-            await page.wait_for_function(
-                """() => {
-                    const u = (location.href || '').toLowerCase();
-                    if (u.includes('success') || u.includes('applied') ||
-                        u.includes('submitted') || u.includes('thank')) {
-                        return true;
-                    }
-                    const t = (document.body && document.body.innerText || '')
-                        .toLowerCase();
-                    return t.includes('thank you')
-                        || t.includes('received your application')
-                        || t.includes('application received')
-                        || t.includes('your application has been');
-                }""",
-                timeout=_CONFIRM_TIMEOUT_MS,
-            )
-
-            confirmation_html = await page.content()
             ts = datetime.now(timezone.utc)
             screenshot_name = (
                 f"{ctx['application_id']}_{int(ts.timestamp())}.png"
             )
             screenshot_path = os.path.join(out_dir, screenshot_name)
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const u = (location.href || '').toLowerCase();
+                        if (u.includes('success') || u.includes('applied') ||
+                            u.includes('submitted') || u.includes('thank')) {
+                            return true;
+                        }
+                        const t = (document.body && document.body.innerText || '')
+                            .toLowerCase();
+                        return t.includes('thank you')
+                            || t.includes('received your application')
+                            || t.includes('application received')
+                            || t.includes('your application has been');
+                    }""",
+                    timeout=_CONFIRM_TIMEOUT_MS,
+                )
+            except PlaywrightTimeoutError as exc:
+                # The submit click went through but the confirmation heuristic
+                # never fired. The submission MAY have actually succeeded —
+                # capture artifacts unconditionally so a human can verify.
+                try:
+                    timeout_html = await page.content()
+                except Exception:  # noqa: BLE001
+                    timeout_html = ""
+                try:
+                    timeout_url = page.url
+                except Exception:  # noqa: BLE001
+                    timeout_url = ""
+                try:
+                    timeout_title = await page.title()
+                except Exception:  # noqa: BLE001
+                    timeout_title = ""
+                try:
+                    await page.screenshot(
+                        path=screenshot_path, full_page=True
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "screenshot capture failed during confirmation timeout"
+                    )
+                raise ConfirmationTimeoutError(
+                    f"confirmation timeout after {_CONFIRM_TIMEOUT_MS}ms",
+                    url=timeout_url,
+                    title=timeout_title,
+                    confirmation_html=timeout_html,
+                    screenshot_path=screenshot_path,
+                ) from exc
+
+            confirmation_html = await page.content()
             await page.screenshot(path=screenshot_path, full_page=True)
+            submitted_at = datetime.now(timezone.utc)
 
             await _emit(on_progress, "confirmed", screenshot=screenshot_path)
 
             return SubmitResult(
                 confirmation_html=confirmation_html,
                 confirmation_screenshot_path=screenshot_path,
-                submitted_at=ts,
+                submitted_at=submitted_at,
             )
         finally:
             await browser.close()

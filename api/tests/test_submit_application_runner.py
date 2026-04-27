@@ -382,6 +382,66 @@ async def test_submit_runner_handles_missing_field(
 
 
 @pytest.mark.asyncio
+async def test_submit_runner_handles_confirmation_timeout(
+    monkeypatch, sessionmaker_factory, tmp_path
+):
+    """ConfirmationTimeoutError must persist captured artifacts on the
+    Application row even though the row is marked ``errored`` — the submit
+    may have actually succeeded server-side and the reviewer needs the HTML
+    + screenshot to verify."""
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    company_id = await _seed_company(sm)
+    posting_id = await _seed_posting(sm, company_id=company_id)
+    variant_id = await _seed_variant_resume_with_version(sm, tmp_path)
+    app_id = await _seed_application(
+        sm,
+        posting_id=posting_id,
+        variant_id=variant_id,
+        canonical_key="anthropic|jobs/42",
+    )
+
+    _patch_pdf_resolver(monkeypatch, tmp_path)
+
+    captured_html = "<html><body>maybe submitted</body></html>"
+    captured_shot = str(tmp_path / "timeout_shot.png")
+
+    async def boom(ctx, on_progress=None, **kwargs):
+        raise greenhouse_submit.ConfirmationTimeoutError(
+            "confirmation timeout after 60000ms",
+            url="https://boards.greenhouse.io/anthropic/jobs/42",
+            title="Application Form",
+            confirmation_html=captured_html,
+            screenshot_path=captured_shot,
+        )
+
+    monkeypatch.setattr(greenhouse_submit, "submit", boom)
+    monkeypatch.setattr(jobs_runner.greenhouse_submit, "submit", boom)
+
+    async with sm() as s:
+        jid = await enqueue_submit_application(s, application_id=app_id)
+        await s.commit()
+
+    await _drain(sm)
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "failed"
+        assert "confirmation timeout" in (job.result or {}).get("error", "")
+
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == app_id)
+            )
+        ).scalar_one()
+        assert app.status == "errored"
+        assert "confirmation timeout" in (app.error or "")
+        assert "submit may have succeeded" in (app.error or "")
+        assert app.confirmation_html == captured_html
+        assert app.confirmation_screenshot_path == captured_shot
+
+
+@pytest.mark.asyncio
 async def test_submit_runner_handles_generic_failure(
     monkeypatch, sessionmaker_factory, tmp_path
 ):
