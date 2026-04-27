@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from pypdf import PdfReader
 
+from app.services.latex_shim import WRAP_SHIM
+
 class CompileError(RuntimeError):
     def __init__(self, stderr: str):
         super().__init__(stderr)
@@ -33,6 +35,11 @@ _OVERFULL_RE = re.compile(
 )
 
 
+_WRAP_RE = re.compile(
+    r"HS_WRAP: line=(\d+) over=([\d.]+)pt limit=([\d.]+)pt text=<<<(.*?)>>>"
+)
+
+
 def _strip_tex_font_prefix(line: str) -> str:
     """Tectonic prints offending lines like '[]\\OT1/cmr/m/n/10.95 the actual text'.
     Strip the bracket and font-spec prefix so the LLM sees readable prose."""
@@ -45,34 +52,97 @@ def _strip_tex_font_prefix(line: str) -> str:
 
 
 def parse_overflows(log: str) -> tuple[OverflowHint, ...]:
-    """Extract Overfull \\hbox warnings from Tectonic's combined log output.
+    """Extract overflow hints from Tectonic's combined log output.
 
-    The next line in the log after the warning header typically echoes the
-    offending text fragment with TeX font selectors prepended; we capture and
-    clean it so the LLM has a usable snippet."""
-    hints: list[OverflowHint] = []
-    lines = log.splitlines()
+    Two sources:
+      * Overfull \\hbox warnings — emitted by TeX when a line cannot be broken
+        and exceeds \\hsize.
+      * HS_WRAP: ... lines — emitted by our preamble shim when a bullet or
+        skill row's measured width exceeds \\linewidth, indicating a soft
+        wrap that TeX silently broke at a space.
+    Hints are returned in the order they appear in the log so callers can
+    reason about them positionally.
+    """
+    hints: list[tuple[int, OverflowHint]] = []
+    # TeX wraps log output at ~79 chars (max_print_line), so a long
+    # HS_WRAP: ... text=<<<...>>> emission spans multiple physical lines.
+    # Reassemble each HS_WRAP entry into a single logical line before
+    # scanning, while keeping non-HS_WRAP lines untouched so the
+    # Overfull \\hbox snippet-extraction below still works.
+    raw_lines = log.splitlines()
+    lines: list[str] = []
+    i = 0
+    while i < len(raw_lines):
+        cur = raw_lines[i]
+        if cur.lstrip().startswith("HS_WRAP:") and ">>>" not in cur:
+            # Cap lookahead so a truncated/malformed HS_WRAP entry (no closing
+            # '>>>') cannot swallow the rest of the log and hide subsequent
+            # Overfull \hbox warnings. After 8 attempts without a terminator,
+            # drop the malformed line as-is (won't match _WRAP_RE) and
+            # continue scanning from the next raw line.
+            MAX_LOOKAHEAD = 8
+            joined = cur
+            j = i + 1
+            attempts = 0
+            while j < len(raw_lines) and ">>>" not in joined and attempts < MAX_LOOKAHEAD:
+                joined += raw_lines[j]
+                j += 1
+                attempts += 1
+            if ">>>" in joined:
+                lines.append(joined)
+                i = j
+            else:
+                lines.append(cur)
+                i += 1
+            continue
+        lines.append(cur)
+        i += 1
     for idx, line in enumerate(lines):
         m = _OVERFULL_RE.search(line)
-        if not m:
-            continue
-        snippet = ""
-        for j in range(idx + 1, min(idx + 4, len(lines))):
-            candidate = lines[j].strip()
-            if not candidate:
-                continue
-            if candidate.startswith("[]") or candidate.startswith("\\"):
-                snippet = _strip_tex_font_prefix(candidate)
-                break
-        hints.append(
-            OverflowHint(
+        if m:
+            snippet = ""
+            for j in range(idx + 1, min(idx + 4, len(lines))):
+                candidate = lines[j].strip()
+                if not candidate:
+                    continue
+                if candidate.startswith("[]") or candidate.startswith("\\"):
+                    snippet = _strip_tex_font_prefix(candidate)
+                    break
+            hints.append((idx, OverflowHint(
                 overflow_pt=float(m.group(1)),
                 line_start=int(m.group(2)),
                 line_end=int(m.group(3)),
                 snippet=snippet,
-            )
-        )
-    return tuple(hints)
+            )))
+            continue
+        w = _WRAP_RE.search(line)
+        if w:
+            line_no = int(w.group(1))
+            # \detokenize emits a space between control sequences and their
+            # following brace ("\textbf {Foo}"). Collapse those so the snippet
+            # round-trips back to the source form. Then strip plain font-style
+            # wrappers (\textbf, \textit, \texttt, \emph) so the snippet reads
+            # as the visible bullet text — both the repair model and the
+            # regression tests match on visible words rather than markup.
+            raw = w.group(4)
+            cleaned = re.sub(r"(\\[A-Za-z@]+)\s+\{", r"\1{", raw)
+            for _ in range(4):
+                new = re.sub(
+                    r"\\(?:textbf|textit|texttt|emph)\{([^{}]*)\}",
+                    r"\1",
+                    cleaned,
+                )
+                if new == cleaned:
+                    break
+                cleaned = new
+            hints.append((idx, OverflowHint(
+                overflow_pt=float(w.group(2)),
+                line_start=line_no,
+                line_end=line_no,
+                snippet=cleaned,
+            )))
+    hints.sort(key=lambda pair: pair[0])
+    return tuple(h for _, h in hints)
 
 
 # Shim for pdfTeX-only primitives so resumes written for pdflatex (Jake's,
@@ -102,12 +172,14 @@ _INPUT_STUBS: dict[str, str] = {
 
 
 def _inject_shim(source: str) -> str:
-    """Insert the pdfTeX shim immediately before \\documentclass (or at the
-    start if no \\documentclass is present)."""
+    """Insert the pdfTeX compatibility shim and the wrap-detection shim
+    immediately before \\documentclass (or at the start if no
+    \\documentclass is present)."""
+    combined = _PDFTEX_SHIM + WRAP_SHIM
     match = re.search(r"\\documentclass", source)
     if not match:
-        return _PDFTEX_SHIM + source
-    return source[: match.start()] + _PDFTEX_SHIM + source[match.start():]
+        return combined + source
+    return source[: match.start()] + combined + source[match.start():]
 
 
 def compile_latex(source: str, timeout: int = 30) -> CompileResult:
@@ -118,7 +190,7 @@ def compile_latex(source: str, timeout: int = 30) -> CompileResult:
         tex_file = tmp_path / "doc.tex"
         tex_file.write_text(_inject_shim(source))
         result = subprocess.run(
-            ["tectonic", "-X", "compile", "--outdir", str(tmp_path), str(tex_file)],
+            ["tectonic", "-X", "compile", "--keep-logs", "--outdir", str(tmp_path), str(tex_file)],
             capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:

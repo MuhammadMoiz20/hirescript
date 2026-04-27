@@ -1,3 +1,5 @@
+import textwrap
+
 from app.services.compile import (
     compile_latex, CompileError, CompileResult, OverflowHint, parse_overflows,
 )
@@ -115,3 +117,156 @@ def test_compile_shim_does_not_clobber_engine_primitives():
     compile_latex(doc)
     result = compile_latex(doc)
     assert result.page_count == 1
+
+
+def test_parse_overflows_extracts_wrap_hint():
+    log = (
+        "Some preamble\n"
+        "HS_WRAP: line=87 over=14.20pt limit=396.00pt text=<<<Optimized PostgreSQL via connection pooling, reducing p95 query latency by 50%.>>>\n"
+        "Trailing junk\n"
+    )
+    hints = parse_overflows(log)
+    assert len(hints) == 1
+    h = hints[0]
+    assert h.line_start == 87
+    assert h.line_end == 87
+    assert h.overflow_pt == 14.20
+    assert "Optimized PostgreSQL" in h.snippet
+
+
+def test_parse_overflows_merges_hbox_and_wrap_in_source_order():
+    log = (
+        "Overfull \\hbox (5.00pt too wide) in paragraph at lines 12--13\n"
+        "[]\\OT1/cmr/m/n/10.95 some overfull text fragment\n"
+        "HS_WRAP: line=42 over=8.00pt limit=396.00pt text=<<<a wrapped bullet>>>\n"
+    )
+    hints = parse_overflows(log)
+    assert len(hints) == 2
+    assert hints[0].line_start == 12
+    assert hints[0].overflow_pt == 5.0
+    assert hints[1].line_start == 42
+    assert hints[1].snippet == "a wrapped bullet"
+
+
+def test_parse_overflows_drops_malformed_wrap_line():
+    log = "HS_WRAP: this line is malformed and should be ignored\n"
+    assert parse_overflows(log) == ()
+
+
+def test_parse_overflows_caps_runaway_hs_wrap_reassembly():
+    """A truncated HS_WRAP line with no closing '>>>' must not swallow the
+    rest of the log. The reassembly lookahead is capped so subsequent
+    Overfull \\hbox warnings are still detected."""
+    filler = "\n".join(f"arbitrary log line {n}" for n in range(20))
+    log = (
+        "HS_WRAP: line=1 over=1.00pt limit=10.00pt text=<<<no closing marker\n"
+        + filler + "\n"
+        "Overfull \\hbox (5.00pt too wide) in paragraph at lines 100--101\n"
+        "[]\\OT1/cmr/m/n/10.95 the offending fragment\n"
+    )
+    hints = parse_overflows(log)
+    # Malformed wrap is dropped (no hint with line_start=1 from _WRAP_RE).
+    assert all(not (h.line_start == 1 and h.line_end == 1) for h in hints)
+    # The hbox warning that appears after the runaway is still detected.
+    hbox = next((h for h in hints if h.line_start == 100 and h.line_end == 101), None)
+    assert hbox is not None, f"expected hbox hint, got {hints!r}"
+    assert hbox.overflow_pt == 5.0
+    assert "offending fragment" in hbox.snippet
+
+
+def test_parse_overflows_handles_triple_angle_in_text():
+    # If a bullet legitimately contains '>>>', the non-greedy match takes
+    # the first closing '>>>'. We accept slight truncation; we never crash.
+    log = "HS_WRAP: line=5 over=1.00pt limit=10.00pt text=<<<a>>>extra>>>\n"
+    hints = parse_overflows(log)
+    assert len(hints) == 1
+    assert hints[0].snippet == "a"
+
+
+_LONG_BULLET = (
+    "Optimized PostgreSQL via connection pooling, reducing p95 query "
+    "latency by 50\\% and improving overall platform performance across "
+    "every region of the deployment fleet."
+)
+
+
+def _minimal_resume(item_text: str) -> str:
+    # Minimal Jake's-resume-like skeleton with a single \resumeItem.
+    return textwrap.dedent(rf"""
+    \documentclass[letterpaper,10pt]{{article}}
+    \usepackage[margin=0.5in]{{geometry}}
+    \usepackage{{enumitem}}
+    \newcommand{{\resumeItem}}[1]{{\item\small{{#1}}}}
+    \newcommand{{\resumeItemListStart}}{{\begin{{itemize}}[leftmargin=0.15in]}}
+    \newcommand{{\resumeItemListEnd}}{{\end{{itemize}}}}
+    \begin{{document}}
+    \resumeItemListStart
+    \resumeItem{{ {item_text} }}
+    \resumeItemListEnd
+    \end{{document}}
+    """).strip()
+
+
+def test_compile_emits_wrap_hint_for_long_resume_item():
+    src = _minimal_resume(_LONG_BULLET)
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert len(result.overflows) >= 1
+    wrap = next((h for h in result.overflows
+                 if "Optimized PostgreSQL" in h.snippet), None)
+    assert wrap is not None, f"expected wrap hint, got {result.overflows!r}"
+    assert wrap.overflow_pt > 0
+
+
+def test_compile_no_wrap_hint_for_short_resume_item():
+    src = _minimal_resume("Short bullet that fits on one line easily.")
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert all("Short bullet" not in h.snippet for h in result.overflows)
+
+
+def test_compile_emits_wrap_hint_for_long_skill_row():
+    src = textwrap.dedent(r"""
+    \documentclass[letterpaper,10pt]{article}
+    \usepackage[margin=0.5in]{geometry}
+    \usepackage{enumitem}
+    \begin{document}
+    \begin{itemize}[leftmargin=0.15in, label={}]
+      \small{\item{
+        \skillRow{Frameworks}{React, Next.js, Node.js, FastAPI, PyTorch, TensorFlow, gRPC, GraphQL, Express, NestJS, Django, Flask, Spring Boot}
+      }}
+    \end{itemize}
+    \end{document}
+    """).strip()
+    result = compile_latex(src)
+    assert result.page_count == 1
+    wrap = next((h for h in result.overflows
+                 if "Frameworks" in h.snippet), None)
+    assert wrap is not None, f"expected skill-row wrap, got {result.overflows!r}"
+
+
+def test_compile_no_wrap_for_minimal_doc_without_resume_macros():
+    src = textwrap.dedent(r"""
+    \documentclass{article}
+    \begin{document}
+    Hello world.
+    \end{document}
+    """).strip()
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert result.overflows == ()
+
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_compile_real_resume_flags_known_bullet_wraps():
+    src = (FIXTURES / "jakes_with_wraps.tex").read_text()
+    result = compile_latex(src)
+    snippets = " | ".join(h.snippet for h in result.overflows)
+    # Three bullets reported by the user as visibly wrapping:
+    assert "Optimized PostgreSQL" in snippets
+    assert "Dartmouth News" in snippets
+    assert "Shipped unpublish-assignments" in snippets

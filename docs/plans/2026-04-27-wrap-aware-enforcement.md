@@ -199,7 +199,7 @@ from app.services.compile import compile_latex
 
 _LONG_BULLET = (
     "Optimized PostgreSQL via connection pooling, reducing p95 query "
-    "latency by 50% and improving overall platform performance across "
+    "latency by 50\\% and improving overall platform performance across "
     "every region of the deployment fleet."
 )
 

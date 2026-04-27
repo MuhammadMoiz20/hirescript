@@ -1,0 +1,168 @@
+\documentclass[letterpaper,10pt]{article}
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.5in]{geometry}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\urlstyle{same}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+\titleformat{\section}{
+  \vspace{-8pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule\vspace{-5pt}]
+
+\pdfgentounicode=1
+
+\newcommand{\resumeItem}[1]{
+  \item\small{#1\vspace{-1pt}}
+}
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-1pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#3} $|$ #1 & #2 $|$ \textit{\small #4} \\
+    \end{tabular*}\vspace{-5pt}
+}
+\newcommand{\resumeProjectHeading}[2]{
+  \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-5pt}
+}
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}[leftmargin=0.15in]}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-2pt}}
+
+\begin{document}
+
+\begin{center}
+  \textbf{\Huge\scshape Muhammad Moiz} \\ \vspace{2pt}
+  \small
+  (603) 349-0579 $|$
+  \href{mailto:moizcs059@gmail.com}{\underline{moizcs059@gmail.com}} $|$
+  \href{https://linkedin.com/in/moizofficial}{\underline{linkedin.com/in/moizofficial}} $|$
+  \href{https://github.com/MuhammadMoiz20}{\underline{github.com/MuhammadMoiz20}} \\ \vspace{3pt}
+  \textbf{Software Engineer --- AI-Native Backend \& Distributed Systems $|$ Agentic Systems, Generative Media, AWS, FastAPI}
+\end{center}
+
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Dartmouth College}{Hanover, NH}
+      {B.S. in Computer Science and Engineering (GPA: 3.7)}{Exp. Aug 2026}
+      \resumeItemListStart
+        \resumeItem{\textbf{Awards}: Faculty Citation (Top 1\% in CS 52 \& CS 76), \textbf{Winner: IvyHacks 2025} (1st of 50 teams)}
+        \resumeItem{\textbf{Coursework}: AI, ML \& Deep Learning, Algorithms, Object-Oriented Programming, Distributed Systems}
+        \resumeItem{\textbf{Teaching}: Lead TA for \textbf{CS 52 Full Stack} \& TA for \textbf{CS 59 Fundamentals}; mentored 100+ students}
+      \resumeItemListEnd
+  \resumeSubHeadingListEnd
+
+\section{Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {Evergreen}{Hanover, NH}
+      {Software Engineering Co-op}{Jan 2026 -- Present}
+      \resumeItemListStart
+        \resumeItem{Architected Google Calendar/Canvas MCP servers powering agentic systems that resolve natural language queries via LLMs.}
+        \resumeItem{Built async \textbf{FastAPI} backend with OAuth 2.0 and full CRUD, achieving sub-100ms latency for real-time distributed sync.}
+        \resumeItem{Implemented OAuth 2.0 with scoped permissions to harden security across distributed systems handling sensitive user data.}
+        \resumeItem{Defined 15+ JSON Schema tools enabling type-safe LLM function calling and strict output validation across all APIs.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Link VT (Series B Logistics SaaS)}{Burlington, VT}
+      {Software Engineer Intern}{Oct 2025 -- Dec 2025}
+      \resumeItemListStart
+        \resumeItem{Architected secure storage using \textbf{AWS S3} Presigned URLs, offloading 40\% of traffic and improving core API performance.}
+        \resumeItem{Designed distributed crawler with Dead Letter Queues and exponential backoff, achieving 99.9\% reliability at scale.}
+        \resumeItem{Authored RFC for migrating legacy admin tools to \textbf{React}; led the full implementation and shipped the feature end-to-end.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Coursera x Dartmouth}{Hanover, NH}
+      {Backend Software Developer Co-op}{Aug 2025 -- Oct 2025}
+      \resumeItemListStart
+        \resumeItem{Engineered a serverless autograder on \textbf{AWS Lambda}, scaling to 2k+ concurrent requests with zero idle infrastructure costs.}
+        \resumeItem{Optimized \textbf{PostgreSQL} via connection pooling, reducing p95 query latency by 50\% and improving overall platform performance.}
+        \resumeItem{Standardized CI/CD pipelines via \textbf{GitHub Actions}, automating test gates and cutting deploy time by 15 minutes.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Muff (Global Manufacturing)}{Manchester, UK}
+      {Platform Engineering Intern}{Jun 2025 -- Aug 2025}
+      \resumeItemListStart
+        \resumeItem{Implemented \textbf{OAuth 2.0/OIDC} SSO across distributed systems for 10k+ employees, cutting security support tickets by 65\%.}
+        \resumeItem{Built global sync engine using \textbf{WebRTC} and \textbf{Redis}, delivering sub-second observability across 12 international sites.}
+        \resumeItem{Refactored legacy Angular to optimized \textbf{React Native} modules, achieving stable native mobile performance at 60fps.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Rauner Digital Archive}{Hanover, NH}
+      {Backend Developer Co-op}{Aug 2024 -- Mar 2025}
+      \resumeItemListStart
+        \resumeItem{Engineered video and audio ingestion pipelines via \textbf{Instagram Graph API} and \textbf{YouTube Data API v3} for generative media preservation.}
+        \resumeItem{Integrated \textbf{Dartmouth News RESTful APIs} with strict validation, centralizing image and text archives for institutional compliance.}
+        \resumeItem{Translated complex archival specs into robust backend storage infrastructure, owning design through full production delivery.}
+        \resumeItem{Achieved 100\% privacy compliance by implementing \textbf{RBAC} and AES-256 encryption across all sensitive digital collections.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Muff (Global Manufacturing)}{Manchester, UK}
+      {Backend Engineering Intern}{Jun 2024 -- Aug 2024}
+      \resumeItemListStart
+        \resumeItem{Developed cloud-native analytics dashboard using \textbf{React} and \textbf{MongoDB}, delivering performant user interfaces for 20k+ users.}
+        \resumeItem{Automated 600k daily ERP updates via \textbf{Python ETL} pipelines, eliminating 20+ hours of weekly manual data entry.}
+        \resumeItem{Reduced query time by 45\% by optimizing \textbf{SQL} indexing strategies for high-volume inventory datasets under production load.}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+\section{Projects}
+  \resumeSubHeadingListStart
+
+    \resumeProjectHeading
+      {\textbf{Classmoji (Open Source)} $|$ \emph{TypeScript, React, Prisma, Socket.IO, Playwright}}{}
+      \resumeItemListStart
+        \resumeItem{Migrated a \textbf{90,000-line JavaScript monorepo} to strict TypeScript across 8 workspaces, eliminating all unsafe \texttt{any} types.}
+        \resumeItem{Shipped unpublish-assignments feature and fixed people search, improving user interfaces for classroom management web workflows.}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{ManToGo} $|$ \emph{React, Node.js, Kafka, MongoDB}}{}
+      \resumeItemListStart
+        \resumeItem{Engineered high-throughput delivery platform processing 1k+ orders via \textbf{Apache Kafka} event streams with sub-second latency.}
+        \resumeItem{Implemented idempotent payment handling via Stripe Webhooks, preventing duplicate charges across all distributed retry paths.}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+\section{Technical Skills}
+\begin{itemize}[leftmargin=0.15in, label={}]
+  \small{\item{
+    \skillRow{Languages}{Python, TypeScript, C++, Java, SQL, Go (Golang)}
+    \skillRow{Infrastructure}{AWS (Lambda, EKS, S3, RDS), Kubernetes, Terraform, Docker, Apache Kafka, Redis}
+    \skillRow{Frameworks}{React, Next.js, Node.js, FastAPI, PyTorch, TensorFlow, gRPC, GraphQL}
+    \skillRow{DevOps \& Tools}{Git, GitHub Actions, Prometheus, Grafana, ArgoCD, Linux/Bash}
+  }}
+\end{itemize}
+
+\end{document}
