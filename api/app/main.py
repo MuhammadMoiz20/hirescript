@@ -17,6 +17,7 @@ from app.routes import (
     postings,
     profile,
     resumes,
+    sources as sources_route,
     tiers,
     versions,
 )
@@ -51,6 +52,7 @@ app.include_router(applications.router)
 app.include_router(tiers.router)
 app.include_router(notifications.router)
 app.include_router(companies.router)
+app.include_router(sources_route.router)
 app.include_router(admin.router)
 
 @app.get("/health")

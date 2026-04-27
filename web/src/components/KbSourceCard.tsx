@@ -5,6 +5,8 @@ import { KbSource } from "../api";
 const SOURCE_LABELS: Record<string, string> = {
   latex_master: "Master LaTeX",
   markdown: "Manual Markdown",
+  notion: "Notion",
+  website: "Personal Website",
 };
 
 function humanize(source: string): string {

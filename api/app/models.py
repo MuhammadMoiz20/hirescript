@@ -202,6 +202,12 @@ class Company(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
     )
+    # Slice-5 Task 11: agentic discovery — when the discover_companies
+    # agent inserts a row it tags ``discovered_by="agent"`` and stores
+    # the model's rationale so the user can review before enabling.
+    # Manually-added rows leave both NULL.
+    discovered_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -296,6 +302,15 @@ class Application(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Browser-agent submit fallback (Slice 5 task 5). ``agent_session_id``
+    # is the opaque handle the runner records when the agent pauses; the
+    # ``awaiting_user_confirmation`` flag mirrors ``status='awaiting_confirmation'``
+    # so the review queue can filter on a boolean without parsing the
+    # status string vocabulary.
+    agent_session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    awaiting_user_confirmation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     posting: Mapped["JobPosting"] = relationship()
     __table_args__ = (
         Index(
@@ -310,6 +325,36 @@ class Application(Base):
             "status",
             "prepared_at",
         ),
+    )
+
+
+class ApplicationResearch(Base):
+    """Dream-tier research brief produced by the dream_research agent.
+
+    One row per application (unique on ``application_id``). ``brief_md``
+    is human-readable markdown rendered in the application drawer;
+    ``signals_json`` is structured (recent_news / hiring_signals /
+    people) so a future tailor pass can consume specific signals
+    without re-parsing prose.
+    """
+
+    __tablename__ = "application_research"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    brief_md: Mapped[str] = mapped_column(Text, nullable=False)
+    signals_json: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

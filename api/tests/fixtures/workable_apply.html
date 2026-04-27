@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply — Workable</title></head>
+<body>
+<div id="app">
+  <h2>Apply for this role</h2>
+  <form id="step1">
+    <label for="resume">Upload your resume</label>
+    <input id="resume" type="file" name="resume" />
+    <button type="button" data-ui="apply-button">Apply with resume</button>
+  </form>
+</div>
+<script>
+  // Click "Apply with resume" advances to step 2 (parsed form).
+  document.querySelector('[data-ui="apply-button"]').addEventListener('click', () => {
+    document.getElementById('app').innerHTML = `
+      <form data-ui="application-form" id="step2" action="/submitted" method="post">
+        <label>Name</label>
+        <input name="candidate[name]" value="Moiz Zahid" />
+        <label>Email</label>
+        <input name="candidate[email]" type="email" value="" />
+        <label>Phone</label>
+        <input name="candidate[phone]" value="" />
+        <button type="submit" data-ui="submit">Submit application</button>
+      </form>
+    `;
+    document.getElementById('step2').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.body.innerHTML =
+        '<div data-ui="application-success"><h1>Thanks for applying!</h1></div>';
+    });
+  });
+</script>
+</body>
+</html>

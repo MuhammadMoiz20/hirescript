@@ -46,6 +46,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (
     Application,
+    ApplicationResearch,
     Company,
     Job,
     JobDescription,
@@ -57,6 +58,8 @@ from app.models import (
 )
 from app.schemas.profile import Profile
 from app.services import answer_cache, notifications
+from app.services.agents import discover_companies as agent_discover
+from app.services.agents import dream_research as agent_dream
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
@@ -70,7 +73,10 @@ from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
 )
+from app.services.submit_adapters import agent_submit
 from app.services.submit_adapters import greenhouse as greenhouse_submit
+from app.services.submit_adapters.protocol import AdapterUnsupported
+from app.services.submit_adapters.registry import ADAPTERS
 from app.services.tailor import tailor_resume
 from app.services.tailor_for_application import tailor_for_application
 from app.services import verify
@@ -79,6 +85,19 @@ from app.services.versioning import snapshot_resume_version
 SessionFactory = Callable[[], AsyncSession]
 
 HEARTBEAT_SEC = 10
+
+
+class _NeedsAttention(Exception):
+    """Raised when the runner refuses to drive a submit and the application
+    must be parked for human review.
+
+    Currently used by the agent-fallback path when the application is in
+    A-mode — the browser-agent is B-mode-only this slice, so an unknown-
+    source posting in A-mode lands in ``status='needs_attention'`` for the
+    user to review and either flip to B-mode or re-target. Distinct from a
+    generic ``RuntimeError`` so the handler can write a deterministic error
+    message + status without conflating it with a real failure.
+    """
 
 
 class _NotOnePageError(Exception):
@@ -911,6 +930,26 @@ async def run_prepare_application_job(
             )
             await s.commit()
             application_id = application.id
+            posting_tier_for_research = (
+                (await s.execute(
+                    select(JobPosting.tier).where(JobPosting.id == posting_id)
+                )).scalar_one_or_none()
+            )
+
+        # Dream-tier research: enqueue a one-shot dream_research job for
+        # the freshly-prepared application. The runner persists onto
+        # ``application_research`` (one row per application) and is a
+        # no-op for non-dream postings.
+        if posting_tier_for_research == "dream":
+            async with sf() as s:
+                s.add(
+                    Job(
+                        kind="dream_research",
+                        status="queued",
+                        payload={"application_id": application_id},
+                    )
+                )
+                await s.commit()
 
         # Verify pass — judges grounding of tailored materials. Failure here
         # MUST NOT block preparation; we leave verify_ok=None so the submit
@@ -1491,15 +1530,126 @@ async def run_submit_application_job(
                     sf, application_id=application_id
                 )
 
-            result = await greenhouse_submit.submit(
-                ctx,
-                on_progress=on_progress,  # type: ignore[arg-type]
-                on_captcha=on_captcha_cb,
-            )
+            # Dispatch by ``posting.source``. If no deterministic adapter is
+            # registered for this source — or the adapter explicitly raises
+            # :class:`AdapterUnsupported` for this specific posting — fall
+            # back to the browser-agent submitter. Agent fallback is B-mode
+            # only this slice (Task 5 owns the implementation); an A-mode
+            # application that hits the agent path is parked as
+            # ``needs_attention`` so the user can review before it runs.
+            adapter = ADAPTERS.get(posting.source)
+            agent_result: agent_submit.AgentSubmitResult | None = None
+
+            async def _run_agent_path() -> agent_submit.AgentSubmitResult:
+                if mode == "A":
+                    raise _NeedsAttention(
+                        "agent fallback refuses A-mode; review and "
+                        "confirm in B-mode"
+                    )
+                return await agent_submit.run(
+                    ctx,
+                    on_progress=on_progress,  # type: ignore[arg-type]
+                )
+
+            if adapter is None:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="adapter_missing",
+                    message=f"no adapter for source={posting.source!r}; "
+                    "falling back to agent",
+                    data={"source": posting.source},
+                )
+                agent_result = await _run_agent_path()
+                result = None
+            else:
+                try:
+                    result = await adapter.submit(
+                        ctx,
+                        on_progress=on_progress,  # type: ignore[arg-type]
+                        on_captcha=on_captcha_cb,
+                    )
+                except AdapterUnsupported as exc:
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="adapter_unsupported",
+                        message=f"adapter unsupported: {exc}; "
+                        "falling back to agent",
+                        data={"source": posting.source},
+                    )
+                    agent_result = await _run_agent_path()
+                    result = None
 
         # 5. Persist artifacts + flip terminal state.
+        # Agent fallback that paused awaiting user confirmation: park the
+        # row in ``awaiting_confirmation`` and surface artifacts so the
+        # review queue can render the confirm card (Task 6). The runner
+        # does NOT mark the row submitted — the user owns that step.
+        if agent_result is not None and agent_result.get(
+            "awaiting_user_confirmation"
+        ):
+            async with sf() as s:
+                values: dict[str, Any] = {
+                    "status": "awaiting_confirmation",
+                    "confirmation_screenshot_path": agent_result.get(
+                        "screenshot_path"
+                    ),
+                    "error": None,
+                }
+                # Best-effort: model fields added in Task 5 may not exist
+                # yet on every branch. Set them dynamically via SQL builder
+                # so this code path stays compatible with the pre-Task-5
+                # schema.
+                from app.models import Application as _App
+                if hasattr(_App, "agent_session_id"):
+                    values["agent_session_id"] = agent_result.get(
+                        "agent_session_id"
+                    )
+                if hasattr(_App, "awaiting_user_confirmation"):
+                    values["awaiting_user_confirmation"] = True
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(**values)
+                )
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "awaiting_user_confirmation": True,
+                            "form_summary": agent_result.get(
+                                "form_summary", ""
+                            ),
+                        },
+                    )
+                )
+                await s.commit()
+            try:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="awaiting_user_confirmation",
+                    message="agent paused before final submit",
+                    data={"application_id": application_id},
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("emit awaiting_user_confirmation failed")
+            return
+
+        # Either a deterministic adapter completed, or the agent ran to
+        # completion (Task 5 may eventually allow that for trusted forms).
+        completion = result if result is not None else agent_result
+        if completion is None:
+            raise RuntimeError(
+                "submit dispatch produced no result and no agent output"
+            )
         confirmation_html = _truncate_confirmation(
-            result["confirmation_html"]
+            completion.get("confirmation_html", "") or ""
         )
 
         async with sf() as s:
@@ -1508,9 +1658,9 @@ async def run_submit_application_job(
                 .where(Application.id == application_id)
                 .values(
                     status="submitted",
-                    submitted_at=result["submitted_at"],
+                    submitted_at=completion["submitted_at"],
                     confirmation_html=confirmation_html,
-                    confirmation_screenshot_path=result[
+                    confirmation_screenshot_path=completion[
                         "confirmation_screenshot_path"
                     ],
                     error=None,
@@ -1529,10 +1679,11 @@ async def run_submit_application_job(
                     finished_at=datetime.now(timezone.utc),
                     result={
                         "application_id": application_id,
-                        "submitted_at": result["submitted_at"].isoformat(),
-                        "screenshot_path": result[
+                        "submitted_at": completion["submitted_at"].isoformat(),
+                        "screenshot_path": completion[
                             "confirmation_screenshot_path"
                         ],
+                        "via": "agent" if agent_result is not None else "adapter",
                     },
                 )
             )
@@ -1548,6 +1699,56 @@ async def run_submit_application_job(
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
+
+    except _NeedsAttention as exc:
+        # Agent path was taken in A-mode; this slice forbids that. Park the
+        # row so the user can flip mode or re-target. Job is succeeded-with-
+        # skip — this is policy enforcement, not a failure.
+        if application_id is not None:
+            try:
+                async with sf() as s:
+                    await s.execute(
+                        update(Application)
+                        .where(Application.id == application_id)
+                        .values(
+                            status="needs_attention",
+                            error=str(exc)[:500],
+                        )
+                    )
+                    await s.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to mark application %s needs_attention",
+                    application_id,
+                )
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "skipped": True,
+                            "reason": "needs_attention",
+                            "detail": str(exc)[:200],
+                        },
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="needs_attention",
+                message=str(exc)[:200],
+                data={"application_id": application_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "needs_attention handler failed for job %s", job_id
+            )
 
     except greenhouse_submit.CaptchaPauseRequired as exc:
         # Captcha handler already persisted the screenshot + notification +
@@ -1726,3 +1927,335 @@ RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "prepare_application": run_prepare_application_job,
     "submit_application": run_submit_application_job,
 }
+
+
+# Slice-5 Task 11 — agentic company discovery. Distinct runner module
+# from the rest of the file because it has no posting/application
+# coupling; it just talks to the discovery agent and inserts companies.
+async def run_discover_companies_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``discover_companies`` job.
+
+    Reads the user's profile + the existing companies allowlist, calls
+    the discovery agent, validates each proposal by hitting the matching
+    source's ``fetch_company_postings``, and inserts verified proposals
+    into ``companies`` with ``enabled=False`` and
+    ``discovered_by="agent"``. Duplicate ``(slug, source)`` pairs are
+    silently dropped so we never overwrite a row the user has already
+    enabled or modified.
+    """
+    async with sf() as s:
+        profile_row = (
+            await s.execute(select(ProfileModel).where(ProfileModel.user_id == 1))
+        ).scalar_one_or_none()
+        profile = profile_row.data if profile_row is not None else {}
+        existing_rows = (
+            await s.execute(select(Company))
+        ).scalars().all()
+        existing = [
+            {
+                "slug": r.slug,
+                "source": r.source,
+                "display_name": r.display_name,
+                "enabled": r.enabled,
+            }
+            for r in existing_rows
+        ]
+        existing_keys = {(r.source, r.slug) for r in existing_rows}
+
+    await emit_event(sf, job_id, phase="discover_start", message="agent", data={})
+    envelope = await agent_discover.propose_companies(
+        profile=profile, existing=existing
+    )
+    proposals = envelope.get("proposals") or []
+
+    inserted = 0
+    skipped_invalid = 0
+    skipped_dup = 0
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        for p in proposals:
+            if not isinstance(p, dict):
+                skipped_invalid += 1
+                continue
+            source = (p.get("source") or "").strip()
+            slug = (p.get("slug") or "").strip()
+            display = (p.get("display_name") or "").strip() or slug
+            rationale = p.get("rationale") or None
+            if not source or not slug or source not in SOURCES:
+                skipped_invalid += 1
+                continue
+            if (source, slug) in existing_keys:
+                skipped_dup += 1
+                continue
+            adapter = SOURCES[source]
+            try:
+                postings = await adapter.fetch_company_postings(
+                    slug, http=http
+                )
+            except TypeError:
+                # Playwright-only adapters don't accept ``http=``; skip
+                # the validation fetch and trust the agent for those.
+                postings = [None]
+            except Exception:
+                logger.exception(
+                    "discover: validation fetch failed for %s/%s",
+                    source,
+                    slug,
+                )
+                skipped_invalid += 1
+                continue
+            if not postings:
+                skipped_invalid += 1
+                continue
+            async with sf() as s:
+                s.add(
+                    Company(
+                        slug=slug,
+                        display_name=display,
+                        source=source,
+                        enabled=False,
+                        discovered_by="agent",
+                        discovery_rationale=rationale,
+                    )
+                )
+                try:
+                    await s.commit()
+                    inserted += 1
+                    existing_keys.add((source, slug))
+                except IntegrityError:
+                    await s.rollback()
+                    skipped_dup += 1
+
+    await emit_event(
+        sf,
+        job_id,
+        phase="discover_done",
+        message=f"inserted={inserted} dup={skipped_dup} invalid={skipped_invalid}",
+        data={
+            "inserted": inserted,
+            "skipped_dup": skipped_dup,
+            "skipped_invalid": skipped_invalid,
+        },
+    )
+
+
+RUNNERS["discover_companies"] = run_discover_companies_job
+
+
+# Slice-5 Task 12 — dream-tier research. After classify writes
+# tier="dream" the runner enqueues this job for the freshly-prepared
+# application; we persist a structured brief to ``application_research``
+# (one row per application, idempotent on repeat runs).
+async def run_dream_research_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``dream_research`` job.
+
+    Reads ``payload['application_id']``, gathers posting + company +
+    profile context, runs the dream-research agent, and upserts the
+    result into ``application_research`` keyed by ``application_id``.
+    """
+    async with sf() as s:
+        job = (
+            await s.execute(select(Job).where(Job.id == job_id))
+        ).scalar_one()
+        application_id = int((job.payload or {}).get("application_id") or 0)
+        if not application_id:
+            return
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == application_id)
+            )
+        ).scalar_one_or_none()
+        if app is None:
+            return
+        posting = (
+            await s.execute(
+                select(JobPosting).where(JobPosting.id == app.posting_id)
+            )
+        ).scalar_one_or_none()
+        if posting is None:
+            return
+        company = None
+        if posting.company_id is not None:
+            company = (
+                await s.execute(
+                    select(Company).where(Company.id == posting.company_id)
+                )
+            ).scalar_one_or_none()
+        profile_row = (
+            await s.execute(select(ProfileModel).where(ProfileModel.user_id == 1))
+        ).scalar_one_or_none()
+        profile = profile_row.data if profile_row is not None else {}
+
+        posting_payload = {
+            "title": posting.title,
+            "location": posting.location,
+            "description_text": posting.description_text,
+            "tier": posting.tier,
+            "apply_url": posting.apply_url,
+        }
+        company_payload = (
+            {
+                "slug": company.slug,
+                "display_name": company.display_name,
+                "source": company.source,
+            }
+            if company is not None
+            else {}
+        )
+
+    await emit_event(sf, job_id, phase="research_start", message="agent", data={})
+    out = await agent_dream.research_company(
+        posting=posting_payload, company=company_payload, profile=profile
+    )
+
+    brief = (out.get("brief_md") or "").strip()
+    signals = out.get("signals") or {}
+    if not isinstance(signals, dict):
+        signals = {}
+    if not brief:
+        # Don't persist a useless empty brief.
+        await emit_event(
+            sf, job_id, phase="research_done", message="empty", data={}
+        )
+        return
+
+    async with sf() as s:
+        existing = (
+            await s.execute(
+                select(ApplicationResearch).where(
+                    ApplicationResearch.application_id == application_id
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            s.add(
+                ApplicationResearch(
+                    application_id=application_id,
+                    brief_md=brief,
+                    signals_json=signals,
+                    model=agent_dream.model_name(deep=False),
+                )
+            )
+        else:
+            existing.brief_md = brief
+            existing.signals_json = signals
+            existing.model = agent_dream.model_name(deep=False)
+        await s.commit()
+
+    await emit_event(
+        sf,
+        job_id,
+        phase="research_done",
+        message=f"persisted application_id={application_id}",
+        data={"application_id": application_id},
+    )
+
+
+RUNNERS["dream_research"] = run_dream_research_job
+
+
+# Slice-5 Task 13 — Notion KB sync. Walks the configured page ids
+# (from ``NOTION_PAGE_IDS`` env, comma-separated) and upserts each into
+# ``kb_documents`` under ``source="notion"``. Pages no longer in the
+# configured set are purged on the next sync.
+async def run_kb_sync_notion(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``kb_sync_notion`` job."""
+    from app.services.kb_sources import notion as notion_kb
+
+    await emit_event(sf, job_id, phase="kb_sync_start", message="notion", data={})
+    try:
+        async with sf() as s:
+            result = await notion_kb.ingest(
+                user_id=1, db=s, page_ids=notion_kb.page_ids_from_env()
+            )
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"source": "notion", **result},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="kb_sync_done", message="notion", data=result
+        )
+    except Exception as exc:  # noqa: BLE001
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"error": str(exc)[:500]},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="failed", message=str(exc)[:500], data={}
+        )
+
+
+RUNNERS["kb_sync_notion"] = run_kb_sync_notion
+
+
+# Slice-5 Task 14 — Personal-website KB sync. Crawls each configured
+# root URL (from ``WEBSITE_ROOT_URLS`` env, comma-separated) and
+# upserts each reachable page into ``kb_documents`` under
+# ``source="website"``. Pages no longer reachable on a re-crawl are
+# purged.
+async def run_kb_sync_website(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``kb_sync_website`` job."""
+    from app.services.kb_sources import website as website_kb
+
+    await emit_event(sf, job_id, phase="kb_sync_start", message="website", data={})
+    try:
+        roots = website_kb.root_urls_from_env()
+        agg = {"created_or_updated": 0, "deleted": 0}
+        for root in roots:
+            async with sf() as s:
+                r = await website_kb.ingest(user_id=1, db=s, root_url=root)
+            agg["created_or_updated"] += int(r.get("created_or_updated", 0))
+            agg["deleted"] += int(r.get("deleted", 0))
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"source": "website", "roots": len(roots), **agg},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="kb_sync_done", message="website", data=agg
+        )
+    except Exception as exc:  # noqa: BLE001
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"error": str(exc)[:500]},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf, job_id, phase="failed", message=str(exc)[:500], data={}
+        )
+
+
+RUNNERS["kb_sync_website"] = run_kb_sync_website

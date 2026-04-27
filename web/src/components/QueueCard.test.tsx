@@ -148,4 +148,27 @@ describe("QueueCard slice-3 surface", () => {
     renderCard(app({ verify_ok: null }));
     expect(screen.queryByTestId("queue-card-verify-banner")).not.toBeInTheDocument();
   });
+
+  test("awaiting_confirmation status renders the agent confirm banner", async () => {
+    renderCard(app({ status: "awaiting_confirmation", mode: "A" }));
+    const banner = await screen.findByTestId("queue-card-confirm-agent-banner");
+    expect(banner).toHaveTextContent(/agent paused at submit/i);
+    expect(banner).toHaveTextContent(/confirm/i);
+  });
+
+  test("Confirm & submit click invokes onConfirmAgent with the application id", async () => {
+    const onConfirmAgent = vi.fn();
+    renderCard(
+      app({ id: 77, status: "awaiting_confirmation", mode: "A" }),
+      { onConfirmAgent },
+    );
+    fireEvent.click(await screen.findByTestId("queue-card-confirm-agent-btn"));
+    expect(onConfirmAgent).toHaveBeenCalledWith(77);
+  });
+
+  test("footer Submit button is disabled while awaiting confirmation", async () => {
+    renderCard(app({ id: 1, status: "awaiting_confirmation", mode: "A" }));
+    const submit = await screen.findByTestId("app-submit-btn");
+    expect(submit).toBeDisabled();
+  });
 });

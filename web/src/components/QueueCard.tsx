@@ -16,9 +16,13 @@ interface Props {
   /** Slice 3: invoked from the verify-blocked banner — should route to the
    * existing edit affordance (handled by the parent route). */
   onEditAndRetry?: (id: number) => void;
+  /** Slice 5: invoked when the user authorizes a paused browser-agent submit
+   * (status === "awaiting_confirmation"). */
+  onConfirmAgent?: (id: number) => void;
   submitting?: boolean;
   cancelling?: boolean;
   resumingA?: boolean;
+  confirmingAgent?: boolean;
 }
 
 function fmtElapsed(iso: string | null): string {
@@ -50,9 +54,11 @@ export default function QueueCard({
   onCancel,
   onResumeA,
   onEditAndRetry,
+  onConfirmAgent,
   submitting,
   cancelling,
   resumingA,
+  confirmingAgent,
 }: Props) {
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
@@ -261,6 +267,39 @@ export default function QueueCard({
         </div>
       )}
 
+      {application.status === "awaiting_confirmation" && (
+        <div
+          role="alert"
+          data-testid="queue-card-confirm-agent-banner"
+          style={{
+            fontSize: 12.5,
+            padding: "10px 14px",
+            background: "color-mix(in oklch, var(--warn) 12%, var(--paper))",
+            color: "var(--ink)",
+            borderBottom: "1px solid var(--rule)",
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <strong>Agent paused at submit</strong> — review the form
+            responses below, then confirm to authorize the browser agent to
+            click submit on your behalf.
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            data-testid="queue-card-confirm-agent-btn"
+            disabled={!onConfirmAgent || confirmingAgent}
+            onClick={() => onConfirmAgent?.(application.id)}
+          >
+            {confirmingAgent ? "Confirming…" : "Confirm & submit"}
+          </Button>
+        </div>
+      )}
+
       {application.verify_ok === false && (
         <div
           role="alert"
@@ -430,6 +469,58 @@ export default function QueueCard({
             )}
           </section>
 
+          {detail?.research && detail.research.brief_md && (
+            <section data-testid="application-research-panel">
+              <h3 className="eyebrow" style={{ margin: "0 0 6px" }}>
+                Company brief · dream tier
+              </h3>
+              <pre style={{
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                fontFamily: "var(--f-sans)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                margin: 0,
+                color: "var(--ink)",
+              }}>
+                {detail.research.brief_md}
+              </pre>
+              {detail.research.signals_json && (
+                <ul style={{
+                  margin: "8px 0 0",
+                  paddingLeft: 18,
+                  fontSize: 12,
+                  color: "var(--ink-2)",
+                  lineHeight: 1.5,
+                }}>
+                  {(detail.research.signals_json.recent_news || []).map((n, i) => (
+                    <li key={`news-${i}`} data-testid="research-signal-news">
+                      <strong>News:</strong> {n}
+                    </li>
+                  ))}
+                  {(detail.research.signals_json.hiring_signals || []).map((n, i) => (
+                    <li key={`hire-${i}`} data-testid="research-signal-hiring">
+                      <strong>Hiring:</strong> {n}
+                    </li>
+                  ))}
+                  {(detail.research.signals_json.people || []).map((n, i) => (
+                    <li key={`ppl-${i}`} data-testid="research-signal-people">
+                      <strong>People:</strong> {n}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mono" style={{
+                marginTop: 6,
+                fontSize: 10,
+                color: "var(--ink-4)",
+                letterSpacing: "0.04em",
+              }}>
+                {detail.research.model}
+              </div>
+            </section>
+          )}
+
           {formEntries.length > 0 && (
             <section>
               <h3 className="eyebrow" style={{ margin: "0 0 6px" }}>Form responses</h3>
@@ -465,7 +556,12 @@ export default function QueueCard({
           size="sm"
           variant="primary"
           data-testid="app-submit-btn"
-          disabled={submitting || application.status === "submitted" || application.status === "submitting"}
+          disabled={
+            submitting ||
+            application.status === "submitted" ||
+            application.status === "submitting" ||
+            application.status === "awaiting_confirmation"
+          }
           onClick={() => onSubmit(application.id)}
         >
           {submitting ? "Submitting…" : submitLabel}

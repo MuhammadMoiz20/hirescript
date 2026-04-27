@@ -20,6 +20,7 @@ from app.models import (
     JobPosting,
     Resume,
     ResumeVersion,
+    Tier,
     User,
 )
 from app.services import jobs_runner
@@ -439,6 +440,263 @@ async def test_submit_runner_handles_confirmation_timeout(
         assert "submit may have succeeded" in (app.error or "")
         assert app.confirmation_html == captured_html
         assert app.confirmation_screenshot_path == captured_shot
+
+
+# --- Task 4: dispatch by source + agent fallback ---------------------------
+
+
+async def _seed_company_with_source(sm, *, slug: str, source: str) -> int:
+    async with sm() as s:
+        c = Company(slug=slug, display_name=slug.title(), source=source)
+        s.add(c)
+        await s.commit()
+        await s.refresh(c)
+        return c.id
+
+
+async def _seed_posting_with_source(
+    sm, *, company_id: int, source: str, source_job_id: str = "1",
+    apply_url: str = "https://example.com/apply",
+) -> int:
+    async with sm() as s:
+        p = JobPosting(
+            user_id=1,
+            source=source,
+            source_job_id=source_job_id,
+            company_id=company_id,
+            title="Engineer",
+            location="Remote",
+            apply_url=apply_url,
+            description_text="x",
+            meta={},
+            status="ready",
+        )
+        s.add(p)
+        await s.commit()
+        await s.refresh(p)
+        return p.id
+
+
+@pytest.mark.asyncio
+async def test_submit_runner_dispatches_to_lever_adapter_by_source(
+    monkeypatch, sessionmaker_factory, tmp_path
+):
+    """A posting with source='lever' must invoke the Lever adapter,
+    NOT Greenhouse. Confirms the registry-based dispatch."""
+    from app.services.submit_adapters import lever as lever_submit
+
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    company_id = await _seed_company_with_source(
+        sm, slug="some-co", source="lever"
+    )
+    posting_id = await _seed_posting_with_source(
+        sm, company_id=company_id, source="lever",
+        apply_url="https://jobs.lever.co/some-co/abc/apply",
+    )
+    variant_id = await _seed_variant_resume_with_version(sm, tmp_path)
+    app_id = await _seed_application(
+        sm,
+        posting_id=posting_id,
+        variant_id=variant_id,
+        canonical_key="some-co|abc",
+    )
+
+    _patch_pdf_resolver(monkeypatch, tmp_path)
+
+    calls = {"lever": 0, "greenhouse": 0}
+
+    async def fake_lever(ctx, on_progress=None, **kwargs):
+        calls["lever"] += 1
+        return {
+            "confirmation_html": "<h1>Thank you for applying</h1>",
+            "confirmation_screenshot_path": str(tmp_path / "shot.png"),
+            "submitted_at": datetime.now(timezone.utc),
+        }
+
+    async def fake_gh(ctx, on_progress=None, **kwargs):
+        calls["greenhouse"] += 1
+        raise AssertionError("greenhouse adapter must not be called for lever posting")
+
+    monkeypatch.setattr(lever_submit, "submit", fake_lever)
+    monkeypatch.setattr(greenhouse_submit, "submit", fake_gh)
+
+    async with sm() as s:
+        jid = await enqueue_submit_application(s, application_id=app_id)
+        await s.commit()
+
+    await _drain(sm)
+
+    assert calls["lever"] == 1
+    assert calls["greenhouse"] == 0
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "succeeded", job.result
+        assert job.result.get("via") == "adapter"
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == app_id)
+            )
+        ).scalar_one()
+        assert app.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_submit_runner_falls_back_to_agent_for_unknown_source_in_b_mode(
+    monkeypatch, sessionmaker_factory, tmp_path
+):
+    """Unknown source + B-mode: agent_submit.run is invoked, application
+    parks awaiting confirmation when the agent returns
+    awaiting_user_confirmation=True."""
+    from app.services.submit_adapters import agent_submit
+
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    company_id = await _seed_company_with_source(
+        sm, slug="weirdco", source="unknown-ats"
+    )
+    posting_id = await _seed_posting_with_source(
+        sm, company_id=company_id, source="unknown-ats",
+        apply_url="https://weirdco.example/jobs/1",
+    )
+    variant_id = await _seed_variant_resume_with_version(sm, tmp_path)
+    app_id = await _seed_application(
+        sm,
+        posting_id=posting_id,
+        variant_id=variant_id,
+        canonical_key="weirdco|jobs/1",
+    )
+
+    _patch_pdf_resolver(monkeypatch, tmp_path)
+
+    captured = {"called": False, "ctx": None}
+
+    async def fake_agent_run(ctx, on_progress=None, **kwargs):
+        captured["called"] = True
+        captured["ctx"] = ctx
+        if on_progress is not None:
+            await on_progress({"phase": "agent_navigated"})
+        return {
+            "awaiting_user_confirmation": True,
+            "agent_session_id": "sess-abc-123",
+            "screenshot_path": str(tmp_path / "agent_shot.png"),
+            "form_summary": "Filled name, email, resume; awaiting submit.",
+        }
+
+    monkeypatch.setattr(agent_submit, "run", fake_agent_run)
+
+    async with sm() as s:
+        jid = await enqueue_submit_application(s, application_id=app_id)
+        await s.commit()
+
+    await _drain(sm)
+
+    assert captured["called"] is True
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "succeeded", job.result
+        assert job.result.get("awaiting_user_confirmation") is True
+
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == app_id)
+            )
+        ).scalar_one()
+        assert app.status == "awaiting_confirmation"
+        assert app.confirmation_screenshot_path == str(
+            tmp_path / "agent_shot.png"
+        )
+
+
+@pytest.mark.asyncio
+async def test_submit_runner_refuses_agent_path_in_a_mode(
+    monkeypatch, sessionmaker_factory, tmp_path
+):
+    """Unknown source + A-mode: agent_submit.run MUST NOT be invoked;
+    application parks in needs_attention so the user can intervene."""
+    from app.services.submit_adapters import agent_submit
+
+    sm = sessionmaker_factory
+    await _ensure_user(sm)
+    company_id = await _seed_company_with_source(
+        sm, slug="weirdco2", source="unknown-ats"
+    )
+    posting_id = await _seed_posting_with_source(
+        sm, company_id=company_id, source="unknown-ats",
+        apply_url="https://weirdco2.example/jobs/2",
+    )
+    variant_id = await _seed_variant_resume_with_version(sm, tmp_path)
+
+    # Seed a Tier with non-zero cap and tag the posting so the A-mode
+    # cap-check passes — we want the dispatch path, not cap_hit.
+    async with sm() as s:
+        s.add(
+            Tier(
+                slug="reach", display_name="Reach", min_fit_score=0,
+                daily_cap=10, default_mode="A", tailor_model="sonnet",
+            )
+        )
+        await s.commit()
+        await s.execute(
+            __import__("sqlalchemy").update(JobPosting)
+            .where(JobPosting.id == posting_id)
+            .values(tier="reach")
+        )
+        await s.commit()
+
+    # Seed application directly with mode='A'.
+    async with sm() as s:
+        app = Application(
+            user_id=1,
+            posting_id=posting_id,
+            mode="A",
+            status="prepared",
+            verify_ok=True,
+            resume_variant_id=variant_id,
+            cover_letter_text="x",
+            form_payload={
+                "first_name": "Moiz", "last_name": "Zahid",
+                "email": "moiz@example.com",
+            },
+            canonical_key="weirdco2|jobs/2",
+        )
+        s.add(app)
+        await s.commit()
+        await s.refresh(app)
+        app_id = app.id
+
+    _patch_pdf_resolver(monkeypatch, tmp_path)
+
+    called = {"agent": False}
+
+    async def fake_agent_run(ctx, on_progress=None, **kwargs):
+        called["agent"] = True
+        raise AssertionError("agent must not be invoked in A-mode")
+
+    monkeypatch.setattr(agent_submit, "run", fake_agent_run)
+
+    async with sm() as s:
+        jid = await enqueue_submit_application(s, application_id=app_id)
+        await s.commit()
+
+    await _drain(sm)
+
+    assert called["agent"] is False
+
+    async with sm() as s:
+        job = (await s.execute(select(Job).where(Job.id == jid))).scalar_one()
+        assert job.status == "succeeded", job.result
+        assert job.result.get("reason") == "needs_attention"
+
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == app_id)
+            )
+        ).scalar_one()
+        assert app.status == "needs_attention"
+        assert "agent fallback refuses A-mode" in (app.error or "")
 
 
 @pytest.mark.asyncio

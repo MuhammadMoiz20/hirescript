@@ -270,20 +270,53 @@ function SourceGroup({
             data-testid={`company-row-${c.id}`}
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(180px, 1.4fr) minmax(140px, 1fr) 90px 80px",
+              gridTemplateColumns: "minmax(140px, 1.4fr) minmax(0, 1fr) 90px 80px",
               gap: 12,
               padding: "10px 14px",
               alignItems: "center",
+              minWidth: 0,
               borderBottom: "1px solid var(--rule)",
               background: "var(--paper)",
             }}
           >
-            <span style={{ fontSize: 13, color: "var(--ink)" }}>
+            <span style={{ fontSize: 13, color: "var(--ink)", display: "inline-flex", alignItems: "center", gap: 6 }}>
               {c.display_name}
+              {c.discovered_by === "agent" && (
+                <span
+                  data-testid={`company-proposed-${c.id}`}
+                  aria-label={
+                    c.discovery_rationale
+                      ? `Proposed by discovery agent: ${c.discovery_rationale}`
+                      : "Proposed by discovery agent"
+                  }
+                  title={c.discovery_rationale || "Proposed by the discovery agent."}
+                  style={{
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 9,
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    padding: "1px 5px",
+                    border: "1px solid var(--accent)",
+                    color: "var(--accent)",
+                    borderRadius: 2,
+                    flexShrink: 0,
+                  }}
+                >
+                  Proposed
+                </span>
+              )}
             </span>
             <span
               className="mono"
-              style={{ fontSize: 12, color: "var(--ink-3)" }}
+              style={{
+                fontSize: 12,
+                color: "var(--ink-3)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }}
+              title={c.slug}
             >
               {c.slug}
             </span>

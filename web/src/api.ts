@@ -642,6 +642,11 @@ export type Company = {
   slug: string;
   display_name: string;
   enabled: boolean;
+  // Slice-5 Task 11: agentic discovery — populated when the
+  // discover_companies agent inserted this row. UI uses these to render
+  // a "Proposed" chip + rationale tooltip in the Companies admin page.
+  discovered_by?: string | null;
+  discovery_rationale?: string | null;
   created_at: string;
 };
 
@@ -784,7 +789,23 @@ export type Application = {
   verify_issues: string[];
   /** Slice 3: short rationale from the verifier. */
   verify_rationale: string | null;
+  /** Slice 5: opaque handle for a paused browser-agent submit session. */
+  agent_session_id?: string | null;
+  /** Slice 5: agent paused before final submit; user must confirm. */
+  awaiting_user_confirmation?: boolean;
 };
+
+export interface ApplicationResearch {
+  brief_md: string;
+  signals_json: {
+    recent_news?: string[];
+    hiring_signals?: string[];
+    people?: string[];
+    [k: string]: unknown;
+  };
+  model: string;
+  generated_at: string;
+}
 
 export type ApplicationDetail = Application & {
   resume_pdf_url: string | null;
@@ -792,6 +813,9 @@ export type ApplicationDetail = Application & {
   prepared_at: string;
   confirmation_html: string | null;
   confirmation_screenshot_path: string | null;
+  // Slice-5 Task 12: dream-tier research brief — present only when the
+  // dream_research agent has run for this application.
+  research?: ApplicationResearch | null;
 };
 
 export async function listApplications(params: {
@@ -839,6 +863,30 @@ export async function pauseA(id: number): Promise<Application> {
   return jsonOrThrow<Application>(res);
 }
 
+/**
+ * Confirm a browser-agent submit run that paused awaiting user review.
+ *
+ * The agent fallback (Slice 5 task 5) drives the application form to the
+ * brink of submit and parks the row in `status='awaiting_confirmation'`.
+ * The user reviews the screenshot + form summary in the queue and calls
+ * this endpoint to authorize the submission. The backend records the
+ * confirmation timestamp and flips the row to `submitted`.
+ */
+export async function confirmAgentSubmit(
+  id: number,
+): Promise<{
+  application_id: number;
+  status: string;
+  submitted_at: string | null;
+  agent_session_id: string | null;
+}> {
+  const res = await fetch(`${BASE}/applications/${id}/confirm_submit`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow(res);
+}
+
 export async function deleteApplication(id: number): Promise<void> {
   const res = await fetch(`${BASE}/applications/${id}`, {
     method: "DELETE",
@@ -850,8 +898,18 @@ export async function deleteApplication(id: number): Promise<void> {
   throw { status: res.status, detail } as ApiError;
 }
 
+export interface SourceInfo {
+  name: string;
+  tos_risk: "clean" | "high";
+}
+
+export async function listSources(): Promise<SourceInfo[]> {
+  return req<SourceInfo[]>("/sources");
+}
+
 export const api = {
   getProfile,
+  listSources,
   putProfile,
   listPostings,
   getPosting,
@@ -862,6 +920,7 @@ export const api = {
   submitApplication,
   promoteToA,
   pauseA,
+  confirmAgentSubmit,
   deleteApplication,
   listTiers,
   updateTier,

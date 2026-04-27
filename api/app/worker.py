@@ -241,6 +241,94 @@ async def _enqueue_due_gmail(sf) -> None:
         await s.commit()
 
 
+async def _enqueue_due_discovery(sf) -> None:
+    """Enqueue one ``discover_companies`` job per day at ~03:00 UTC.
+
+    Drops the tick if any ``discover_companies`` job is already queued
+    or running so we never stack proposals while the agent is mid-run.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    if now.hour != 3:
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "discover_companies",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="discover_companies", status="queued", payload={}))
+        await s.commit()
+
+
+_KB_SYNC_NOTION_INTERVAL_SEC = int(
+    os.environ.get("KB_SYNC_NOTION_INTERVAL_SEC", str(6 * 3600))
+)
+
+
+async def _enqueue_due_kb_notion(sf) -> None:
+    """Enqueue a ``kb_sync_notion`` job if token + page IDs are configured.
+
+    Drops the tick if any ``kb_sync_notion`` job is already queued or
+    running so we never stack syncs.
+    """
+    from app.services.kb_sources import notion as notion_kb
+
+    if not notion_kb.has_token():
+        return
+    if not notion_kb.page_ids_from_env():
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "kb_sync_notion",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="kb_sync_notion", status="queued", payload={}))
+        await s.commit()
+
+
+async def _enqueue_due_kb_website(sf) -> None:
+    """Enqueue a ``kb_sync_website`` job nightly at ~04:00 UTC.
+
+    Drops the tick if any ``kb_sync_website`` job is already queued or
+    running, or if no root URLs are configured.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.kb_sources import website as website_kb
+
+    if not website_kb.root_urls_from_env():
+        return
+    now = datetime.now(timezone.utc)
+    if now.hour != 4:
+        return
+    async with sf() as s:
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "kb_sync_website",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        if inflight:
+            return
+        s.add(Job(kind="kb_sync_website", status="queued", payload={}))
+        await s.commit()
+
+
 async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     """Periodically enqueue ingest_source + autonomous submit + gmail jobs.
 
@@ -252,6 +340,7 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
     loop.
     """
     last_gmail_tick = 0.0
+    last_kb_notion_tick = 0.0
     gmail_logged = False
     if not os.environ.get("GMAIL_USER"):
         log.info(
@@ -268,6 +357,23 @@ async def _scheduler(sf, shutdown: asyncio.Event) -> None:
             await _enqueue_due_amode_submits(sf)
         except Exception:
             log.exception("scheduler error (a-mode submits)")
+        try:
+            await _enqueue_due_discovery(sf)
+        except Exception:
+            log.exception("scheduler error (discover_companies)")
+
+        now = loop.time()
+        if (now - last_kb_notion_tick) >= _KB_SYNC_NOTION_INTERVAL_SEC:
+            try:
+                await _enqueue_due_kb_notion(sf)
+                last_kb_notion_tick = now
+            except Exception:
+                log.exception("scheduler error (kb_sync_notion)")
+
+        try:
+            await _enqueue_due_kb_website(sf)
+        except Exception:
+            log.exception("scheduler error (kb_sync_website)")
 
         if os.environ.get("GMAIL_USER"):
             now = loop.time()

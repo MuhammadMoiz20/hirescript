@@ -96,7 +96,7 @@ def test_get_kb_sources_returns_known_sources_even_when_empty(client_authed):
     assert r.status_code == 200
     body = r.json()
     sources = {s["source"] for s in body}
-    assert sources == {"latex_master", "markdown"}
+    assert sources == {"latex_master", "markdown", "notion", "website"}
     for s in body:
         assert s["document_count"] == 0
         assert s["chunk_count"] == 0
@@ -116,7 +116,7 @@ def test_get_kb_sources_aggregates_counts(client_authed, monkeypatch):
 
 
 def test_post_sync_unknown_source_returns_404(client_authed):
-    r = client_authed.post("/kb/sources/notion/sync")
+    r = client_authed.post("/kb/sources/does-not-exist/sync")
     assert r.status_code == 404
     assert r.json()["detail"] == "Unknown source"
 

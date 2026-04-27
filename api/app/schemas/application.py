@@ -23,6 +23,17 @@ class ApplicationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ResearchOut(BaseModel):
+    """Dream-tier research brief surfaced on the application detail."""
+
+    brief_md: str
+    signals_json: dict
+    model: str
+    generated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ApplicationDetailOut(ApplicationOut):
     """Review-queue detail view: adds resume PDF link + prepared timestamp."""
 
@@ -32,6 +43,9 @@ class ApplicationDetailOut(ApplicationOut):
     prepared_at: datetime
     confirmation_html: str | None = None
     confirmation_screenshot_path: str | None = None
+    # Dream-tier research brief (Slice 5 task 12). Present only when the
+    # dream_research agent has produced + persisted one for this application.
+    research: ResearchOut | None = None
 
 
 class ApplicationListOut(BaseModel):
