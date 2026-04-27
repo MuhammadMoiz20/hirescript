@@ -13,6 +13,7 @@ from app.services.sources.indeed import indeed_source
 from app.services.sources.lever import lever_source
 from app.services.sources.linkedin import linkedin_source
 from app.services.sources.protocol import NormalizedPosting, Source
+from app.services.sources.wellfound import wellfound_source
 from app.services.sources.workable import workable_source
 
 __all__ = ["NormalizedPosting", "SOURCES", "Source"]
@@ -25,4 +26,5 @@ SOURCES: dict[str, Source] = {
     workable_source.name: workable_source,
     linkedin_source.name: linkedin_source,
     indeed_source.name: indeed_source,
+    wellfound_source.name: wellfound_source,
 }
