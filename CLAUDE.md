@@ -75,12 +75,16 @@ Do not skip ahead by building later-phase features just because the architecture
 
 ## Design Handoff
 
-The current UI design handoff lives in `design/handoffs/hirescript/`.
+Two authoritative design sources for UI work, in priority order:
+
+1. **HireScript Suite design bundle** — `https://api.anthropic.com/v1/design/h/eYoG49rlvB10YH7DYeCNgA`. Fetch the bundle, read `README.md` + `chats/chat1.md`, then read the relevant `*.jsx`/`*.css` files. The product is **one app: `HireScript Suite`** with two functional sections (Per-job and Mass-apply) under a unified top bar + left nav + ⌘K. The bundle's three HTML files are prototype iteration stages, not three apps to ship — production runs in one React SPA, no iframes.
+2. **In-repo handoff** — `design/handoffs/hirescript/`. Continues to provide tokens for already-shipped components.
 
 For frontend work:
 
-- Treat `design/handoffs/hirescript` as the visual and interaction reference.
-- Read the handoff README first, then inspect the project files for screens, components, fixtures, and design tokens.
+- Fetch the bundle URL first, then read `design/handoffs/hirescript/README.md`.
+- Treat both sources as the visual and interaction reference; if they conflict, the bundle wins for new surfaces and the in-repo handoff wins for already-shipped tokens (so existing components don't drift).
+- Inspect the project files for screens, components, fixtures, and design tokens.
 - Reuse the intent, layout, density, component hierarchy, typography, spacing, colors, and interaction patterns from the handoff.
 - Translate the handoff into production React/TypeScript code; do not copy prototype-only structure if it conflicts with the app architecture.
 - Keep implementation scoped to the current phase. If the handoff shows later-phase UI, preserve the design direction but do not wire unsupported behavior.
