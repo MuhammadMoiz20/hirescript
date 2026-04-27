@@ -11,6 +11,7 @@ from app.routes import (
     jds,
     jobs,
     kb,
+    notifications,
     onboarding,
     postings,
     profile,
@@ -47,6 +48,7 @@ app.include_router(onboarding.router)
 app.include_router(postings.router)
 app.include_router(applications.router)
 app.include_router(tiers.router)
+app.include_router(notifications.router)
 app.include_router(admin.router)
 
 @app.get("/health")
