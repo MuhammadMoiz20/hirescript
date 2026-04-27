@@ -8,6 +8,7 @@ from app.routes import (
     admin,
     applications,
     auth,
+    companies,
     jds,
     jobs,
     kb,
@@ -49,6 +50,7 @@ app.include_router(postings.router)
 app.include_router(applications.router)
 app.include_router(tiers.router)
 app.include_router(notifications.router)
+app.include_router(companies.router)
 app.include_router(admin.router)
 
 @app.get("/health")
