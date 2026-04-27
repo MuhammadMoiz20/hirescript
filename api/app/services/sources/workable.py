@@ -199,7 +199,33 @@ class WorkableSource:
         *,
         http: httpx.AsyncClient,
     ) -> CoverLetterRequirement:
-        return CoverLetterRequirement.UNKNOWN
+        parsed = _parse_workable_url(apply_url)
+        if parsed is None:
+            return CoverLetterRequirement.UNKNOWN
+        slug, shortcode = parsed
+        url = f"{WORKABLE_DETAIL_URL}/{slug}/jobs/{shortcode}"
+        try:
+            resp = await http.get(url, timeout=10.0)
+            if resp.status_code != 200:
+                return CoverLetterRequirement.UNKNOWN
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return CoverLetterRequirement.UNKNOWN
+        form = (data.get("application_form") or {}).get("form_fields") or []
+        for f in form:
+            key = (f.get("key") or "").lower().replace("-", "_")
+            label = (f.get("label") or "").lower()
+            if (
+                "cover_letter" in key
+                or "coverletter" in key
+                or "cover letter" in label
+            ):
+                return (
+                    CoverLetterRequirement.REQUIRED
+                    if f.get("required")
+                    else CoverLetterRequirement.OPTIONAL
+                )
+        return CoverLetterRequirement.NOT_PRESENT
 
 
 workable_source = WorkableSource()
