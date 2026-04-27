@@ -51,6 +51,20 @@ async def test_applications_canonical_key_unique():
 
 
 @pytest.mark.asyncio
+async def test_slice3_tables_exist():
+    async with engine.connect() as conn:
+        for t in ("tiers", "claude_usage", "notifications"):
+            assert (await conn.execute(text(f"SELECT to_regclass('{t}')"))).scalar() == t
+
+
+@pytest.mark.asyncio
+async def test_tiers_seeded():
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text("SELECT slug FROM tiers ORDER BY slug"))).all()
+        assert {r[0] for r in rows} == {"dream", "targeted", "wide_net", "skip"}
+
+
+@pytest.mark.asyncio
 async def test_applications_cascade_on_posting_delete():
     async with engine.connect() as conn:
         result = await conn.execute(text(
