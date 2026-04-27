@@ -1,8 +1,20 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, JSON, String, Text, ForeignKey, DateTime, Uuid, func
+from sqlalchemy import (
+    BigInteger,
+    Integer,
+    JSON,
+    String,
+    Text,
+    ForeignKey,
+    DateTime,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
@@ -82,6 +94,65 @@ class ResumeVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    data: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class KbDocument(Base):
+    __tablename__ = "kb_documents"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    source: Mapped[str] = mapped_column(Text)
+    source_id: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    raw_text: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    hash: Mapped[str] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "source", "source_id", name="uq_kb_documents_user_source_id"
+        ),
+    )
+
+
+class KbChunk(Base):
+    __tablename__ = "kb_chunks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("kb_documents.id", ondelete="CASCADE")
+    )
+    chunk_index: Mapped[int] = mapped_column()
+    text: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column()
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024))
+    meta: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+
 
 
 class Job(Base):

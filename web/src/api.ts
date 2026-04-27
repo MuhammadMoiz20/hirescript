@@ -303,6 +303,229 @@ export async function rollback(id: number, versionId: number): Promise<ResumeOut
   return res.json();
 }
 
+// ── Profile ─────────────────────────────────────────────────────────────────
+
+export type WorkAuth = {
+  citizenships: string[];
+  sponsorship_needed: Record<string, boolean>;
+  relocate_to: string[];
+};
+
+export type EmploymentType = "full_time" | "contract" | "internship";
+
+export type Position = {
+  company: string;
+  title: string;
+  start: string;
+  end: string | null;
+  location: string | null;
+  employment_type: EmploymentType;
+  description: string | null;
+};
+
+export type Education = {
+  institution: string;
+  degree: string;
+  field: string | null;
+  start: string | null;
+  end: string | null;
+};
+
+export type CompanyStage = "pre_seed" | "seed" | "series_a" | "series_b_plus" | "public";
+export type WorkMode = "remote" | "hybrid" | "onsite";
+
+export type Preferences = {
+  salary_floor_usd: number | null;
+  salary_target_usd: number | null;
+  role_families: string[];
+  dealbreakers: string[];
+  company_stages: CompanyStage[];
+  work_modes: WorkMode[];
+  cover_letter_default: boolean;
+  disclose_salary_default: boolean;
+};
+
+export type EEODefaults = {
+  gender: string | null;
+  race_ethnicity: string | null;
+  veteran: string | null;
+  disability: string | null;
+};
+
+export type Profile = {
+  legal_name: string;
+  preferred_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  links: Record<string, string>;
+  work_auth: WorkAuth;
+  positions: Position[];
+  education: Education[];
+  languages: string[];
+  preferences: Preferences;
+  eeo: EEODefaults;
+  kill_list: string[];
+};
+
+export type ApiError = { status: number; detail?: any };
+
+// TODO(slice-2): the codebase mixes two error conventions. New endpoints
+// (profile, kb) use jsonOrThrow which throws an ApiError({status, detail}).
+// Older endpoints throw plain Error(text) via req<T>(). Migrate the rest
+// to jsonOrThrow before the inbox/queue surfaces in slice 2.
+async function jsonOrThrow<T>(res: Response): Promise<T> {
+  if (res.ok) return res.json() as Promise<T>;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = await res.text().catch(() => null); }
+  throw { status: res.status, detail } as ApiError;
+}
+
+export async function getProfile(): Promise<Profile> {
+  const res = await fetch(`${BASE}/profile`, { credentials: "include" });
+  return jsonOrThrow<Profile>(res);
+}
+
+export async function putProfile(profile: Profile): Promise<Profile> {
+  const res = await fetch(`${BASE}/profile`, {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  return jsonOrThrow<Profile>(res);
+}
+
+// ── Onboarding chat ─────────────────────────────────────────────────────────
+
+export type OnboardingTurn = { role: "user" | "assistant"; content: string };
+
+export type OnboardingToolEvent =
+  | { type: "tool_use"; tool: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; result: Record<string, unknown> }
+  | { type: "tool_error"; tool: string; error: string };
+
+export interface OnboardingCallbacks {
+  onChunk?: (text: string) => void;
+  onTool?: (event: OnboardingToolEvent) => void;
+  onError?: (message: string) => void;
+  onDone?: () => void;
+}
+
+export async function streamOnboarding(
+  message: string,
+  history: OnboardingTurn[],
+  cb: OnboardingCallbacks = {},
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/onboarding/message`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ message, history }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    cb.onError?.(await res.text().catch(() => `HTTP ${res.status}`));
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const evt = parseSseEvent(raw);
+      if (!evt) continue;
+      try {
+        const data = JSON.parse(evt.data || "{}");
+        if (evt.event === "text") cb.onChunk?.(data.text || "");
+        else if (evt.event === "tool_use") cb.onTool?.({ type: "tool_use", tool: data.tool, input: data.input || {} });
+        else if (evt.event === "tool_result") cb.onTool?.({ type: "tool_result", tool: data.tool, result: data.result || {} });
+        else if (evt.event === "tool_error") cb.onTool?.({ type: "tool_error", tool: data.tool, error: data.error || "" });
+        else if (evt.event === "done") cb.onDone?.();
+      } catch {
+        // ignore malformed frame
+      }
+    }
+  }
+}
+
+// ── Knowledge base ──────────────────────────────────────────────────────────
+
+export type KbSourceName = "latex_master" | "markdown";
+
+export type KbSource = {
+  source: KbSourceName | string;
+  document_count: number;
+  chunk_count: number;
+  last_synced_at: string | null;
+};
+
+export type KbSyncResult = {
+  source: string;
+  document_count: number;
+  chunk_count: number;
+  created_or_updated?: number;
+  deleted?: number;
+};
+
+export type KbDocumentItem = {
+  id: number;
+  source: string;
+  source_id: string;
+  title: string;
+  fetched_at: string | null;
+  chunk_count: number;
+  hash: string;
+};
+
+export type KbDocumentList = {
+  items: KbDocumentItem[];
+  total: number;
+};
+
+export async function getKbSources(): Promise<KbSource[]> {
+  const res = await fetch(`${BASE}/kb/sources`, { credentials: "include" });
+  return jsonOrThrow<KbSource[]>(res);
+}
+
+export async function syncKbSource(source: string): Promise<KbSyncResult> {
+  const res = await fetch(`${BASE}/kb/sources/${source}/sync`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<KbSyncResult>(res);
+}
+
+export async function getKbDocuments(opts: { source?: string; limit?: number; offset?: number } = {}): Promise<KbDocumentList> {
+  const params = new URLSearchParams();
+  if (opts.source) params.set("source", opts.source);
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  const res = await fetch(`${BASE}/kb/documents${qs ? `?${qs}` : ""}`, { credentials: "include" });
+  return jsonOrThrow<KbDocumentList>(res);
+}
+
+export async function deleteKbDocument(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/kb/documents/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = null; }
+  throw { status: res.status, detail } as ApiError;
+}
+
+// ── Jobs (background queue) ────────────────────────────────────────────────
+
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export interface Job {
@@ -374,6 +597,12 @@ export async function cancelJob(id: string): Promise<void> {
 }
 
 export const api = {
+  getProfile,
+  putProfile,
+  getKbSources,
+  syncKbSource,
+  getKbDocuments,
+  deleteKbDocument,
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
   listResumes: () => req<Array<{ id: number; name: string; template_id: string; latex_source: string; updated_at: string }>>("/resumes"),
@@ -410,6 +639,7 @@ export const api = {
     return res.json();
   },
   streamEdit,
+  streamOnboarding,
   acceptEdit,
   tailorToJd,
   getJob,
