@@ -177,6 +177,32 @@ async def query_json(
         raise AgentError(f"invalid JSON: {exc}; got {raw[:200]}") from exc
 
 
+async def query_text(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    tier: ModelTier,
+) -> str:
+    """Run a non-streaming query and return the concatenated text output.
+
+    Used by short-form generation paths (cover letters, screener answers)
+    that don't need a JSON envelope. Raises ``AgentError`` on empty output.
+    """
+    options = ClaudeAgentOptions(
+        model=MODELS[tier],
+        system_prompt=system_prompt,
+    )
+    collected: list[str] = []
+    async for msg in query(prompt=user_prompt, options=options):
+        text = _extract_text(msg)
+        if text:
+            collected.append(text)
+    raw = "".join(collected).strip()
+    if not raw:
+        raise AgentError("Model returned no text for query_text")
+    return raw
+
+
 def _format_history(history: list[tuple[str, str]] | None) -> str:
     """Render prior chat turns as a plain transcript prefixed to the user prompt.
 

@@ -20,5 +20,11 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e ".[dev]"
 
+# Playwright + Chromium for the submit_application runner. We install only
+# chromium (not webkit/firefox) to keep the image as small as possible while
+# still satisfying the Greenhouse adapter. ``install-deps chromium`` pulls in
+# the apt packages Chromium needs to launch headlessly.
+RUN python -m playwright install --with-deps chromium
+
 COPY . .
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

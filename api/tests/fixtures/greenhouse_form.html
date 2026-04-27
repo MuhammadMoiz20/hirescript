@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head><title>Apply</title></head>
+<body>
+<form id="application_form" action="/submitted" method="post" enctype="multipart/form-data">
+  <label for="first_name">First name</label>
+  <input id="first_name" name="first_name" />
+
+  <label for="last_name">Last name</label>
+  <input id="last_name" name="last_name" />
+
+  <label for="email">Email</label>
+  <input id="email" type="email" name="email" />
+
+  <label for="phone">Phone</label>
+  <input id="phone" name="phone" />
+
+  <label for="resume">Resume</label>
+  <input id="resume" type="file" name="resume" />
+
+  <label for="cover_letter">Cover letter</label>
+  <textarea id="cover_letter" name="cover_letter"></textarea>
+
+  <label for="custom_q_linkedin">LinkedIn URL</label>
+  <input name="linkedin_url" id="custom_q_linkedin" />
+
+  <label for="custom_q_referral">How did you hear about us?</label>
+  <input name="referral_source" id="custom_q_referral" />
+
+  <button type="submit">Submit application</button>
+</form>
+<script>
+  const form = document.getElementById('application_form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    document.body.innerHTML =
+      '<h1>Thank you</h1><p>We received your application.</p>';
+  });
+</script>
+</body>
+</html>

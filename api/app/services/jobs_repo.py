@@ -132,6 +132,87 @@ async def emit_event(
         await s.commit()
 
 
+async def enqueue_ingest_greenhouse(
+    db: AsyncSession, *, company_slug: str
+) -> uuid.UUID:
+    """Insert a queued ``ingest_greenhouse`` job for ``company_slug``.
+
+    Caller owns the transaction (we only ``flush`` so the row is visible
+    inside their transaction; the caller commits). Returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="ingest_greenhouse",
+            status="queued",
+            payload={"company_slug": company_slug},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
+async def enqueue_classify_posting(
+    db: AsyncSession, *, posting_id: int
+) -> uuid.UUID:
+    """Insert a queued ``classify_posting`` job for ``posting_id``.
+
+    Caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="classify_posting",
+            status="queued",
+            payload={"posting_id": posting_id},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
+async def enqueue_prepare_application(
+    db: AsyncSession, *, posting_id: int
+) -> uuid.UUID:
+    """Insert a queued ``prepare_application`` job for ``posting_id``.
+
+    Caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="prepare_application",
+            status="queued",
+            payload={"posting_id": posting_id},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
+async def enqueue_submit_application(
+    db: AsyncSession, *, application_id: int
+) -> uuid.UUID:
+    """Insert a queued ``submit_application`` job for ``application_id``.
+
+    Caller owns the transaction (we only ``flush``); returns the new job id.
+    """
+    job_id = uuid.uuid4()
+    db.add(
+        Job(
+            id=job_id,
+            kind="submit_application",
+            status="queued",
+            payload={"application_id": application_id},
+        )
+    )
+    await db.flush()
+    return job_id
+
+
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:
     """Mark a queued or running job as cancelled. Returns True if a row changed."""
     async with sf() as s:

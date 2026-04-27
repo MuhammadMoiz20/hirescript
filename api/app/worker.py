@@ -13,22 +13,32 @@ import os
 import signal
 import uuid
 
+from sqlalchemy import select
+
 from app.db import SessionLocal
+from app.models import Company, Job
 from app.services import jobs_runner
-from app.services.jobs_repo import claim_one, reclaim_stale_jobs
+from app.services.jobs_repo import (
+    claim_one,
+    enqueue_ingest_greenhouse,
+    reclaim_stale_jobs,
+)
+from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
 
 log = logging.getLogger("worker")
 
 POLL_SEC = 1.0
+INGEST_INTERVAL_SEC = int(os.environ.get("INGEST_INTERVAL_SEC", "900"))
 
 
 async def _dispatch(sf, job, sem: asyncio.Semaphore) -> None:
     """Run a single claimed job, always releasing the semaphore on exit."""
     try:
-        if job.kind == "tailor":
-            await jobs_runner.run_tailor_job(sf, job.id)
-        else:
+        runner = jobs_runner.RUNNERS.get(job.kind)
+        if runner is None:
             log.warning("unknown job kind: %s", job.kind)
+        else:
+            await runner(sf, job.id)
     finally:
         sem.release()
 
@@ -67,6 +77,88 @@ async def run_until_idle(
         await asyncio.gather(*inflight, return_exceptions=True)
 
 
+async def _seed_companies(sf) -> None:
+    """Reconcile :data:`GREENHOUSE_COMPANIES` into the companies table on every boot.
+
+    For each (slug, display) in the allowlist, INSERT if missing. Existing
+    rows are not modified — operator-disabled or display-name-edited rows
+    are preserved.
+    """
+    async with sf() as s:
+        existing_slugs = set(
+            (await s.execute(select(Company.slug))).scalars().all()
+        )
+        added = 0
+        for slug, display in GREENHOUSE_COMPANIES:
+            if slug not in existing_slugs:
+                s.add(
+                    Company(
+                        slug=slug,
+                        display_name=display,
+                        source="greenhouse",
+                        enabled=True,
+                    )
+                )
+                added += 1
+        if added:
+            await s.commit()
+            log.info("seeded %d new companies", added)
+
+
+async def _enqueue_due_ingests(sf) -> None:
+    """Enqueue an ``ingest_greenhouse`` job for every enabled company that
+    does not already have one queued or running.
+
+    JSONB ``->>`` works on Postgres but not SQLite; rather than branch on
+    dialect we filter inflight jobs in Python after pulling the small set
+    of queued/running ingest jobs. The cardinality is bounded by
+    ``len(GREENHOUSE_COMPANIES)`` so this is cheap.
+    """
+    async with sf() as s:
+        enabled = (
+            await s.execute(
+                select(Company).where(Company.enabled.is_(True))
+            )
+        ).scalars().all()
+
+        inflight = (
+            await s.execute(
+                select(Job).where(
+                    Job.kind == "ingest_greenhouse",
+                    Job.status.in_(("queued", "running")),
+                )
+            )
+        ).scalars().all()
+        inflight_slugs = {
+            (j.payload or {}).get("company_slug") for j in inflight
+        }
+
+        for c in enabled:
+            if c.slug in inflight_slugs:
+                continue
+            await enqueue_ingest_greenhouse(s, company_slug=c.slug)
+        await s.commit()
+
+
+async def _scheduler(sf, shutdown: asyncio.Event) -> None:
+    """Periodically enqueue ingest_greenhouse jobs.
+
+    Runs once on entry, then every ``INGEST_INTERVAL_SEC`` seconds until
+    ``shutdown`` is set. Errors are logged but do not stop the loop.
+    """
+    while not shutdown.is_set():
+        try:
+            await _enqueue_due_ingests(sf)
+        except Exception:
+            log.exception("scheduler error")
+        try:
+            await asyncio.wait_for(
+                shutdown.wait(), timeout=INGEST_INTERVAL_SEC
+            )
+        except asyncio.TimeoutError:
+            pass
+
+
 async def main() -> None:
     """Production entrypoint. Runs until SIGINT/SIGTERM, then drains."""
     logging.basicConfig(level=logging.INFO)
@@ -75,11 +167,14 @@ async def main() -> None:
     log.info("worker %s starting concurrency=%d", worker_id, concurrency)
 
     await reclaim_stale_jobs(SessionLocal, after_seconds=60)
+    await _seed_companies(SessionLocal)
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown.set)
+
+    scheduler_task = asyncio.create_task(_scheduler(SessionLocal, shutdown))
 
     sem = asyncio.Semaphore(concurrency)
     inflight: set[asyncio.Task] = set()
@@ -97,13 +192,23 @@ async def main() -> None:
 
         async def _wrap(j):
             try:
-                await jobs_runner.run_tailor_job(SessionLocal, j.id)
+                runner = jobs_runner.RUNNERS.get(j.kind)
+                if runner is None:
+                    log.warning("unknown job kind: %s", j.kind)
+                else:
+                    await runner(SessionLocal, j.id)
             finally:
                 sem.release()
 
         t = asyncio.create_task(_wrap(job))
         inflight.add(t)
         t.add_done_callback(inflight.discard)
+
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
 
     log.info("worker draining %d jobs", len(inflight))
     if inflight:

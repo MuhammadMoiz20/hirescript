@@ -596,9 +596,142 @@ export async function cancelJob(id: string): Promise<void> {
   if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
 }
 
+// ── Postings (Inbox) ───────────────────────────────────────────────────────
+
+export type Posting = {
+  id: number;
+  source: string;
+  source_job_id: string;
+  company: string | null;
+  title: string;
+  location: string | null;
+  apply_url: string;
+  tier: string | null;
+  fit_score: number | null;
+  status: string;
+  ingested_at: string;
+};
+
+export type PostingDetail = Posting & {
+  description_text: string;
+  description_html: string | null;
+  meta: Record<string, unknown>;
+  canonical_key: string | null;
+  classification_rationale: string | null;
+};
+
+export async function listPostings(params: {
+  status?: string;
+  tier?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ items: Posting[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.tier) qs.set("tier", params.tier);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const res = await fetch(`${BASE}/postings${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
+  return jsonOrThrow<{ items: Posting[]; total: number }>(res);
+}
+
+export async function getPosting(id: number): Promise<PostingDetail> {
+  const res = await fetch(`${BASE}/postings/${id}`, { credentials: "include" });
+  return jsonOrThrow<PostingDetail>(res);
+}
+
+export async function preparePosting(id: number): Promise<{ job_id: string; batch_id: string }> {
+  const res = await fetch(`${BASE}/postings/${id}/prepare`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<{ job_id: string; batch_id: string }>(res);
+}
+
+export async function skipPosting(id: number): Promise<{ posting_id: number; status: string }> {
+  const res = await fetch(`${BASE}/postings/${id}/skip`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<{ posting_id: number; status: string }>(res);
+}
+
+// ── Applications (Review queue) ────────────────────────────────────────────
+
+export type Application = {
+  id: number;
+  posting_id: number;
+  posting: Posting;
+  status: string;
+  mode: "A" | "B";
+  cover_letter_text: string | null;
+  form_payload: Record<string, unknown> | null;
+  submitted_at: string | null;
+  error: string | null;
+};
+
+export type ApplicationDetail = Application & {
+  resume_pdf_url: string | null;
+  canonical_key: string | null;
+  prepared_at: string;
+  confirmation_html: string | null;
+  confirmation_screenshot_path: string | null;
+};
+
+export async function listApplications(params: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ items: Application[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const res = await fetch(`${BASE}/applications${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
+  return jsonOrThrow<{ items: Application[]; total: number }>(res);
+}
+
+export async function getApplication(id: number): Promise<ApplicationDetail> {
+  const res = await fetch(`${BASE}/applications/${id}`, { credentials: "include" });
+  return jsonOrThrow<ApplicationDetail>(res);
+}
+
+export async function submitApplication(id: number): Promise<{ job_id: string }> {
+  const res = await fetch(`${BASE}/applications/${id}/submit`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<{ job_id: string }>(res);
+}
+
+export async function deleteApplication(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/applications/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = null; }
+  throw { status: res.status, detail } as ApiError;
+}
+
 export const api = {
   getProfile,
   putProfile,
+  listPostings,
+  getPosting,
+  preparePosting,
+  skipPosting,
+  listApplications,
+  getApplication,
+  submitApplication,
+  deleteApplication,
   getKbSources,
   syncKbSource,
   getKbDocuments,
