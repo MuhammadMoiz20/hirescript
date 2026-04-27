@@ -50,6 +50,7 @@ from app.models import (
     JobPosting,
     Profile as ProfileModel,
     Resume,
+    ResumeVersion,
 )
 from app.schemas.profile import Profile
 from app.services import answer_cache
@@ -61,6 +62,7 @@ from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
 )
+from app.services.submit_adapters import greenhouse as greenhouse_submit
 from app.services.tailor import tailor_resume
 from app.services.tailor_for_application import tailor_for_application
 from app.services.versioning import snapshot_resume_version
@@ -856,6 +858,375 @@ async def run_prepare_application_job(
             await hb
 
 
+async def _resolve_resume_pdf(
+    sf: SessionFactory, *, resume_id: int, dest_dir: str
+) -> str:
+    """Materialize the latest ResumeVersion PDF for ``resume_id`` to disk.
+
+    Tries MinIO/S3 (via ``compiled_pdf_key``) first; falls back to a local
+    versions/<id>.pdf file if storage is unreachable. Raises if neither
+    source can produce bytes — an empty resume is a hard fail because the
+    submit can't proceed without a PDF.
+    """
+    async with sf() as s:
+        version = (
+            await s.execute(
+                select(ResumeVersion)
+                .where(ResumeVersion.resume_id == resume_id)
+                .order_by(ResumeVersion.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if version is None:
+        raise RuntimeError(
+            f"no ResumeVersion for resume_id={resume_id}"
+        )
+
+    import os
+    from app.services.storage import get_pdf
+
+    os.makedirs(dest_dir, exist_ok=True)
+    out_path = os.path.join(dest_dir, f"resume_{version.id}.pdf")
+
+    pdf_bytes: bytes | None = None
+    if version.compiled_pdf_key:
+        try:
+            pdf_bytes = get_pdf(key=version.compiled_pdf_key)
+        except Exception:  # noqa: BLE001 — fall through to local fallback
+            logger.warning(
+                "storage get_pdf failed for key %s; trying local fallback",
+                version.compiled_pdf_key,
+            )
+
+    if pdf_bytes is None:
+        local = f"/app/compiled_pdfs/versions/{version.id}.pdf"
+        if os.path.exists(local):
+            with open(local, "rb") as f:
+                pdf_bytes = f.read()
+
+    if not pdf_bytes:
+        raise RuntimeError(
+            f"could not load PDF for ResumeVersion {version.id}"
+        )
+
+    with open(out_path, "wb") as f:
+        f.write(pdf_bytes)
+    return out_path
+
+
+def _build_submit_context(
+    *,
+    application_id: int,
+    apply_url: str,
+    profile_data: dict[str, Any],
+    resume_pdf_path: str,
+    cover_letter_text: str,
+    form_payload: dict[str, Any],
+) -> dict[str, Any]:
+    profile = (
+        Profile.model_validate(profile_data) if profile_data else None
+    )
+    legal_name = profile.legal_name if profile else ""
+    first, last = _split_legal_name(legal_name)
+    email = (profile.email if profile else None) or ""
+    phone = (profile.phone if profile else None) or ""
+    links = (profile.links if profile else {}) or {}
+    return {
+        "application_id": application_id,
+        "posting_apply_url": apply_url,
+        "profile_first_name": form_payload.get("first_name") or first,
+        "profile_last_name": form_payload.get("last_name") or last,
+        "profile_email": form_payload.get("email") or email,
+        "profile_phone": form_payload.get("phone") or phone,
+        "profile_links": {
+            "linkedin": form_payload.get("linkedin")
+            or links.get("linkedin", ""),
+            "github": form_payload.get("github") or links.get("github", ""),
+            "site": form_payload.get("website") or links.get("site", ""),
+        },
+        "resume_pdf_path": resume_pdf_path,
+        "cover_letter_text": cover_letter_text or "",
+        "form_payload": form_payload or {},
+    }
+
+
+_CONFIRMATION_HTML_LIMIT = 64 * 1024
+
+
+async def run_submit_application_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Submit a prepared :class:`Application` via the Greenhouse adapter.
+
+    Steps:
+
+    1. Load the application + posting + profile.
+    2. Re-check the dedup gate: if any *other* application with the same
+       ``canonical_key`` is already submitted, mark this row
+       ``duplicate_skipped`` without driving the browser.
+    3. Flip status to ``submitting``, materialize the resume PDF.
+    4. Build a :class:`SubmitContext`, drive the adapter, forward progress
+       events as :class:`JobEvent` rows.
+    5. On success: persist confirmation HTML (capped to 64KB to avoid
+       JSONB bloat) + screenshot path + ``submitted_at``; flip the row to
+       ``submitted`` and the posting to ``submitted``.
+    6. On :class:`MissingFieldError` or any other exception: mark
+       application ``errored`` + populate ``error``; mark job ``failed``.
+       The row stays in the queue for human investigation.
+    """
+    import os
+    import tempfile
+
+    hb = asyncio.create_task(_heartbeat(sf, job_id))
+    application_id: int | None = None
+    try:
+        async with sf() as s:
+            job = (
+                await s.execute(select(Job).where(Job.id == job_id))
+            ).scalar_one()
+            payload: dict[str, Any] = job.payload or {}
+            application_id = int(payload["application_id"])
+
+            app = (
+                await s.execute(
+                    select(Application).where(Application.id == application_id)
+                )
+            ).scalar_one_or_none()
+            if app is None:
+                raise ValueError(
+                    f"application {application_id} not found"
+                )
+            posting = (
+                await s.execute(
+                    select(JobPosting).where(JobPosting.id == app.posting_id)
+                )
+            ).scalar_one()
+
+            # 2. Dedup gate — refuse if a sibling application has already
+            # been submitted for the same canonical_key.
+            already_submitted = (
+                await s.execute(
+                    select(Application.id).where(
+                        Application.user_id == app.user_id,
+                        Application.canonical_key == app.canonical_key,
+                        Application.id != app.id,
+                        Application.status == "submitted",
+                    )
+                )
+            ).scalar_one_or_none()
+            if already_submitted is not None:
+                app.status = "duplicate_skipped"
+                app.error = "another application already submitted"
+                await s.commit()
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="duplicate_skipped",
+                    message="already submitted",
+                    data={"application_id": application_id},
+                )
+                async with sf() as s2:
+                    await s2.execute(
+                        update(Job)
+                        .where(Job.id == job_id)
+                        .values(
+                            status="succeeded",
+                            finished_at=datetime.now(timezone.utc),
+                            result={
+                                "application_id": application_id,
+                                "skipped": True,
+                                "reason": "already submitted",
+                            },
+                        )
+                    )
+                    await s2.commit()
+                try:
+                    await emit_event(
+                        sf, job_id, phase="done", message=None, data={}
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "emit done event failed for job %s", job_id
+                    )
+                return
+
+            apply_url = posting.apply_url
+            resume_variant_id = app.resume_variant_id
+            cover_letter_text = app.cover_letter_text or ""
+            form_payload = dict(app.form_payload or {})
+
+            app.status = "submitting"
+            app.error = None
+            await s.commit()
+
+            profile_row = (
+                await s.execute(
+                    select(ProfileModel).where(
+                        ProfileModel.user_id == app.user_id
+                    )
+                )
+            ).scalar_one_or_none()
+            profile_data = (
+                profile_row.data if profile_row is not None else {}
+            ) or {}
+
+        if resume_variant_id is None:
+            raise RuntimeError(
+                "application has no resume_variant_id; "
+                "cannot submit without a tailored resume"
+            )
+
+        # Materialize the PDF into a per-job temp dir we clean up on exit.
+        with tempfile.TemporaryDirectory(prefix="submit_") as tmpdir:
+            resume_pdf_path = await _resolve_resume_pdf(
+                sf, resume_id=resume_variant_id, dest_dir=tmpdir
+            )
+
+            ctx = _build_submit_context(
+                application_id=application_id,
+                apply_url=apply_url,
+                profile_data=profile_data,
+                resume_pdf_path=resume_pdf_path,
+                cover_letter_text=cover_letter_text,
+                form_payload=form_payload,
+            )
+
+            async def on_progress(ev: dict[str, Any]) -> None:
+                phase = ev.get("phase", "progress")
+                data = {k: v for k, v in ev.items() if k != "phase"}
+                await emit_event(
+                    sf, job_id, phase=phase, message=None, data=data
+                )
+
+            result = await greenhouse_submit.submit(
+                ctx, on_progress=on_progress  # type: ignore[arg-type]
+            )
+
+        # 5. Persist artifacts + flip terminal state.
+        confirmation_html = result["confirmation_html"]
+        if len(confirmation_html) > _CONFIRMATION_HTML_LIMIT:
+            confirmation_html = confirmation_html[:_CONFIRMATION_HTML_LIMIT]
+
+        async with sf() as s:
+            await s.execute(
+                update(Application)
+                .where(Application.id == application_id)
+                .values(
+                    status="submitted",
+                    submitted_at=result["submitted_at"],
+                    confirmation_html=confirmation_html,
+                    confirmation_screenshot_path=result[
+                        "confirmation_screenshot_path"
+                    ],
+                    error=None,
+                )
+            )
+            await s.execute(
+                update(JobPosting)
+                .where(JobPosting.id == posting.id)
+                .values(status="submitted")
+            )
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="succeeded",
+                    finished_at=datetime.now(timezone.utc),
+                    result={
+                        "application_id": application_id,
+                        "submitted_at": result["submitted_at"].isoformat(),
+                        "screenshot_path": result[
+                            "confirmation_screenshot_path"
+                        ],
+                    },
+                )
+            )
+            await s.commit()
+
+        try:
+            await emit_event(
+                sf,
+                job_id,
+                phase="done",
+                message=None,
+                data={"application_id": application_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("emit done event failed for job %s", job_id)
+
+    except greenhouse_submit.MissingFieldError as exc:
+        await _fail_application(
+            sf,
+            application_id=application_id,
+            job_id=job_id,
+            error=f"missing field: {exc.field}",
+        )
+
+    except Exception as exc:  # noqa: BLE001 — terminal catch-all per spec
+        await _fail_application(
+            sf,
+            application_id=application_id,
+            job_id=job_id,
+            error=str(exc)[:500],
+        )
+
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
+async def _fail_application(
+    sf: SessionFactory,
+    *,
+    application_id: int | None,
+    job_id: uuid.UUID,
+    error: str,
+) -> None:
+    """Flip Application -> errored and Job -> failed; emit a failed event.
+
+    Each step runs in its own session and swallows secondary exceptions so
+    a transient DB blip on the failure path doesn't mask the original
+    error.
+    """
+    if application_id is not None:
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(status="errored", error=error[:500])
+                )
+                await s.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "failed to mark application %s as errored", application_id
+            )
+    try:
+        async with sf() as s:
+            await s.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=datetime.now(timezone.utc),
+                    result={"error": error[:500]},
+                )
+            )
+            await s.commit()
+        await emit_event(
+            sf,
+            job_id,
+            phase="failed",
+            message=error[:500],
+            data={"error": error[:500]},
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "terminal failure handler failed for job %s", job_id
+        )
+
+
 # Dispatch table mapping job ``kind`` -> async runner. New runners (slice 2+)
 # register themselves here so the worker supervisor stays kind-agnostic.
 # NOTE: tests must use monkeypatch.setitem(RUNNERS, kind, fake), not
@@ -867,4 +1238,5 @@ RUNNERS: dict[str, Callable[[SessionFactory, uuid.UUID], Awaitable[None]]] = {
     "ingest_greenhouse": run_ingest_greenhouse_job,
     "classify_posting": run_classify_posting_job,
     "prepare_application": run_prepare_application_job,
+    "submit_application": run_submit_application_job,
 }

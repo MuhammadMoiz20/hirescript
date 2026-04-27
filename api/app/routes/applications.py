@@ -13,7 +13,6 @@ Slice 2 surfaces prepared applications for human review:
 from __future__ import annotations
 
 import logging
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import delete as sa_delete, func, select
@@ -21,12 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_user
 from app.db import get_db
-from app.models import Application, Company, Job, JobPosting, ResumeVersion
+from app.models import Application, Company, JobPosting, ResumeVersion
 from app.schemas.application import (
     ApplicationDetailOut,
     ApplicationListOut,
     ApplicationOut,
 )
+from app.services.jobs_repo import enqueue_submit_application
 
 logger = logging.getLogger(__name__)
 
@@ -201,19 +201,10 @@ async def submit_application(
 ) -> dict:
     """Enqueue a ``submit_application`` job.
 
-    The runner is registered by Task 15. Until then jobs of this kind sit
-    queued and the worker logs ``unknown job kind`` — that's expected.
+    The runner is :func:`app.services.jobs_runner.run_submit_application_job`.
     """
     app = await _load_application_for_user(db, application_id, user_id)
-    job_id = uuid.uuid4()
-    db.add(
-        Job(
-            id=job_id,
-            kind="submit_application",
-            status="queued",
-            payload={"application_id": app.id},
-        )
-    )
+    job_id = await enqueue_submit_application(db, application_id=app.id)
     await db.commit()
     return {"job_id": str(job_id)}
 
