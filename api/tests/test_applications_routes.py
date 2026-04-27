@@ -46,6 +46,7 @@ async def _seed_posting_and_app(
     status: str = "prepared",
     cover_letter: str | None = "Cover letter body.",
     form_payload: dict | None = None,
+    posting_meta: dict | None = None,
 ) -> tuple[int, int]:
     async with SessionLocal() as s:
         p = JobPosting(
@@ -56,7 +57,7 @@ async def _seed_posting_and_app(
             location="Remote",
             apply_url=f"https://example.test/jobs/{source_job_id}",
             description_text="desc",
-            meta={},
+            meta=posting_meta if posting_meta is not None else {},
             status="ready",
         )
         s.add(p)
@@ -240,3 +241,39 @@ def test_pause_a_404_for_missing():
     cookies = _login()
     r = client.post("/applications/999999/pause_A", cookies=cookies)
     assert r.status_code == 404
+
+
+def test_application_detail_exposes_cover_letter_requirement():
+    cookies = _login()
+    _, aid = asyncio.run(
+        _seed_posting_and_app(
+            source_job_id="cl-1",
+            posting_meta={"cover_letter": {"requirement": "not_present"}},
+        )
+    )
+    r = client.get(f"/applications/{aid}", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert r.json()["cover_letter_requirement"] == "not_present"
+
+
+def test_application_list_exposes_cover_letter_requirement():
+    cookies = _login()
+    asyncio.run(
+        _seed_posting_and_app(
+            source_job_id="cl-2",
+            posting_meta={"cover_letter": {"requirement": "required"}},
+        )
+    )
+    r = client.get("/applications", cookies=cookies)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["cover_letter_requirement"] == "required"
+
+
+def test_application_default_cover_letter_requirement_is_unknown():
+    cookies = _login()
+    _, aid = asyncio.run(_seed_posting_and_app(source_job_id="cl-3"))
+    r = client.get(f"/applications/{aid}", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert r.json()["cover_letter_requirement"] == "unknown"

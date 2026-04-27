@@ -13,6 +13,13 @@ class ApplicationOut(BaseModel):
     status: str
     mode: Literal["A", "B"]
     cover_letter_text: str | None = None
+    # Detected cover-letter requirement from the posting's ATS probe.
+    # One of: "required" | "optional" | "not_present" | "unknown".
+    # Defaults to "unknown" when no probe has run / no key cached on
+    # ``posting.meta["cover_letter"]["requirement"]``.
+    cover_letter_requirement: Literal[
+        "required", "optional", "not_present", "unknown"
+    ] = "unknown"
     form_payload: dict | None = None
     submitted_at: datetime | None = None
     error: str | None = None
