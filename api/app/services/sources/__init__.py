@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.services.sources.ashby import ashby_source
 from app.services.sources.greenhouse import greenhouse_source
+from app.services.sources.indeed import indeed_source
 from app.services.sources.lever import lever_source
 from app.services.sources.linkedin import linkedin_source
 from app.services.sources.protocol import NormalizedPosting, Source
@@ -23,4 +24,5 @@ SOURCES: dict[str, Source] = {
     ashby_source.name: ashby_source,
     workable_source.name: workable_source,
     linkedin_source.name: linkedin_source,
+    indeed_source.name: indeed_source,
 }
