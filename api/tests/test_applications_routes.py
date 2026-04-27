@@ -184,3 +184,59 @@ def test_delete_application_404_for_missing():
     cookies = _login()
     r = client.delete("/applications/999999", cookies=cookies)
     assert r.status_code == 404
+
+
+def test_promote_to_a_sets_mode():
+    cookies = _login()
+    _, aid = asyncio.run(_seed_posting_and_app(source_job_id="9"))
+
+    r = client.post(f"/applications/{aid}/promote_to_A", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "A"
+
+    async def _check():
+        async with SessionLocal() as s:
+            return (
+                await s.execute(
+                    select(Application).where(Application.id == aid)
+                )
+            ).scalar_one()
+
+    row = asyncio.run(_check())
+    assert row.mode == "A"
+
+
+def test_promote_to_a_clears_captcha_pause():
+    cookies = _login()
+    _, aid = asyncio.run(
+        _seed_posting_and_app(source_job_id="9", status="captcha_pause")
+    )
+
+    r = client.post(f"/applications/{aid}/promote_to_A", cookies=cookies)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "A"
+    assert body["status"] == "prepared"
+
+
+def test_promote_to_a_404_for_missing():
+    cookies = _login()
+    r = client.post("/applications/999999/promote_to_A", cookies=cookies)
+    assert r.status_code == 404
+
+
+def test_pause_a_sets_mode_b():
+    cookies = _login()
+    _, aid = asyncio.run(_seed_posting_and_app(source_job_id="9"))
+    # Promote first so we exercise A→B.
+    client.post(f"/applications/{aid}/promote_to_A", cookies=cookies)
+
+    r = client.post(f"/applications/{aid}/pause_A", cookies=cookies)
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "B"
+
+
+def test_pause_a_404_for_missing():
+    cookies = _login()
+    r = client.post("/applications/999999/pause_A", cookies=cookies)
+    assert r.status_code == 404
