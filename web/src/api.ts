@@ -659,6 +659,68 @@ export async function skipPosting(id: number): Promise<{ posting_id: number; sta
   return jsonOrThrow<{ posting_id: number; status: string }>(res);
 }
 
+// ── Applications (Review queue) ────────────────────────────────────────────
+
+export type Application = {
+  id: number;
+  posting_id: number;
+  posting: Posting;
+  status: string;
+  mode: "A" | "B";
+  cover_letter_text: string | null;
+  form_payload: Record<string, unknown> | null;
+  submitted_at: string | null;
+  error: string | null;
+};
+
+export type ApplicationDetail = Application & {
+  resume_pdf_url: string | null;
+  canonical_key: string | null;
+  prepared_at: string;
+  confirmation_html: string | null;
+  confirmation_screenshot_path: string | null;
+};
+
+export async function listApplications(params: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ items: Application[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const res = await fetch(`${BASE}/applications${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
+  return jsonOrThrow<{ items: Application[]; total: number }>(res);
+}
+
+export async function getApplication(id: number): Promise<ApplicationDetail> {
+  const res = await fetch(`${BASE}/applications/${id}`, { credentials: "include" });
+  return jsonOrThrow<ApplicationDetail>(res);
+}
+
+export async function submitApplication(id: number): Promise<{ job_id: string }> {
+  const res = await fetch(`${BASE}/applications/${id}/submit`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow<{ job_id: string }>(res);
+}
+
+export async function deleteApplication(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/applications/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (res.status === 204) return;
+  let detail: any;
+  try { detail = (await res.json()).detail; } catch { detail = null; }
+  throw { status: res.status, detail } as ApiError;
+}
+
 export const api = {
   getProfile,
   putProfile,
@@ -666,6 +728,10 @@ export const api = {
   getPosting,
   preparePosting,
   skipPosting,
+  listApplications,
+  getApplication,
+  submitApplication,
+  deleteApplication,
   getKbSources,
   syncKbSource,
   getKbDocuments,
