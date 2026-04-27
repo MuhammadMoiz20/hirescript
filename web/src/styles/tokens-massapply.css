@@ -1,0 +1,38 @@
+/* Mass-apply token additions.
+   Sits on top of tokens.css; everything else inherits.
+   Adapted from hirescript/project/tokens-massapply.css. */
+
+:root {
+  /* Tier colors — four distinguishable hues, weight descending */
+  --tier-dream:         oklch(0.55 0.16 295);
+  --tier-dream-soft:    oklch(0.95 0.04 295);
+  --tier-targeted:      oklch(0.5  0.13 220);
+  --tier-targeted-soft: oklch(0.94 0.04 220);
+  --tier-wide_net:      oklch(0.55 0.09 160);
+  --tier-wide_net-soft: oklch(0.94 0.04 160);
+  --tier-skip:          oklch(0.55 0.01 250);
+  --tier-skip-soft:     oklch(0.94 0.005 250);
+
+  /* Mode glyph colors — reuse existing model hues so we don't add a new family */
+  --mode-a: var(--sonnet);
+  --mode-b: var(--haiku);
+
+  /* Gauge */
+  --gauge-track: var(--paper-3);
+  /* --gauge-fill is computed inline from pct (ok → warn → err) */
+
+  /* Live-session frame: pulses warn while agent acts */
+  --live-frame: var(--warn);
+  --live-frame-soft: var(--warn-soft);
+}
+
+:root[data-theme="dark"] {
+  --tier-dream:         oklch(0.78 0.14 295);
+  --tier-dream-soft:    oklch(0.28 0.06 295);
+  --tier-targeted:      oklch(0.75 0.13 220);
+  --tier-targeted-soft: oklch(0.28 0.07 220);
+  --tier-wide_net:      oklch(0.78 0.1 160);
+  --tier-wide_net-soft: oklch(0.28 0.06 160);
+  --tier-skip:          oklch(0.6 0.01 250);
+  --tier-skip-soft:     oklch(0.26 0.006 250);
+}
