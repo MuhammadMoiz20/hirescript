@@ -6,12 +6,13 @@ import Editor from "./routes/Editor";
 import Profile from "./routes/Profile";
 import Knowledge from "./routes/Knowledge";
 import OnboardingChat from "./routes/OnboardingChat";
+import Inbox from "./routes/Inbox";
 import { Jobs } from "./routes/Jobs";
 import { JobsBadge } from "./components/JobsBadge";
 import Button from "./components/ui/Button";
 import { api } from "./api";
 
-type View = "list" | "editor" | "profile" | "knowledge" | "onboarding" | "jobs";
+type View = "list" | "editor" | "profile" | "knowledge" | "inbox" | "onboarding" | "jobs";
 
 function StateApp() {
   const [openId, setOpenId] = useState<number | null>(null);
@@ -49,6 +50,13 @@ function StateApp() {
     return (
       <Shell active="onboarding" onNav={onNav} onHome={goList}>
         <OnboardingChat onBack={goList} />
+      </Shell>
+    );
+  }
+  if (view === "inbox") {
+    return (
+      <Shell active="inbox" onNav={onNav} onHome={goList}>
+        <Inbox onBack={goList} />
       </Shell>
     );
   }
@@ -139,6 +147,13 @@ function Shell({
           onClick={() => onNav("knowledge")}
         >
           Knowledge
+        </Button>
+        <Button
+          size="sm"
+          variant={active === "inbox" ? "subtle" : "ghost"}
+          onClick={() => onNav("inbox")}
+        >
+          Inbox
         </Button>
         <Button
           size="sm"
