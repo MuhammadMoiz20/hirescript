@@ -16,9 +16,6 @@ from app.models import (
     Tier,
     User,
 )
-from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
-
-
 @pytest.mark.asyncio
 async def test_worker_drains_one_job(
     monkeypatch, sessionmaker_factory, seeded_master_resume
@@ -119,59 +116,6 @@ async def test_worker_dispatches_via_runners_table(
 
 
 # --- Scheduler --------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_scheduler_seeds_companies_on_first_boot(sessionmaker_factory):
-    from app.worker import _seed_companies
-
-    await _seed_companies(sessionmaker_factory)
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        slugs = {r.slug for r in rows}
-        assert slugs == {slug for slug, _ in GREENHOUSE_COMPANIES}
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-
-    # Re-running is idempotent: row count unchanged, no duplicate-slug failure.
-    await _seed_companies(sessionmaker_factory)
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-
-
-@pytest.mark.asyncio
-async def test_seed_companies_adds_only_missing_slugs(sessionmaker_factory):
-    """Pre-seed a subset of allowlist slugs; reconcile must add the rest
-    while leaving pre-existing rows untouched (e.g. an operator-edited
-    display_name must not be overwritten)."""
-    from app.worker import _seed_companies
-
-    pre_seeded = list(GREENHOUSE_COMPANIES)[:2]
-    custom_display = "Operator Edited Display"
-
-    async with sessionmaker_factory() as s:
-        for slug, _display in pre_seeded:
-            s.add(
-                Company(
-                    slug=slug,
-                    display_name=custom_display,
-                    source="greenhouse",
-                    enabled=True,
-                )
-            )
-        await s.commit()
-
-    await _seed_companies(sessionmaker_factory)
-
-    async with sessionmaker_factory() as s:
-        rows = (await s.execute(select(Company))).scalars().all()
-        slugs = {r.slug for r in rows}
-        assert slugs == {slug for slug, _ in GREENHOUSE_COMPANIES}
-        assert len(rows) == len(GREENHOUSE_COMPANIES)
-        # Pre-seeded rows preserved verbatim — display_name not overwritten.
-        by_slug = {r.slug: r for r in rows}
-        for slug, _display in pre_seeded:
-            assert by_slug[slug].display_name == custom_display
 
 
 @pytest.mark.asyncio

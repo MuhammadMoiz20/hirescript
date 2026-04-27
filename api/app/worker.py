@@ -25,7 +25,10 @@ from app.services.jobs_repo import (
     enqueue_submit_application,
     reclaim_stale_jobs,
 )
-from app.services.sources.greenhouse_companies import GREENHOUSE_COMPANIES
+
+# NOTE: companies are seeded by Alembic migration 0012 — the boot-time
+# reconciliation that lived here was removed in slice 4 Batch A so the DB
+# is the single source of truth for the allowlist.
 
 log = logging.getLogger("worker")
 
@@ -79,42 +82,14 @@ async def run_until_idle(
         await asyncio.gather(*inflight, return_exceptions=True)
 
 
-async def _seed_companies(sf) -> None:
-    """Reconcile :data:`GREENHOUSE_COMPANIES` into the companies table on every boot.
-
-    For each (slug, display) in the allowlist, INSERT if missing. Existing
-    rows are not modified — operator-disabled or display-name-edited rows
-    are preserved.
-    """
-    async with sf() as s:
-        existing_slugs = set(
-            (await s.execute(select(Company.slug))).scalars().all()
-        )
-        added = 0
-        for slug, display in GREENHOUSE_COMPANIES:
-            if slug not in existing_slugs:
-                s.add(
-                    Company(
-                        slug=slug,
-                        display_name=display,
-                        source="greenhouse",
-                        enabled=True,
-                    )
-                )
-                added += 1
-        if added:
-            await s.commit()
-            log.info("seeded %d new companies", added)
-
-
 async def _enqueue_due_ingests(sf) -> None:
     """Enqueue an ``ingest_greenhouse`` job for every enabled company that
     does not already have one queued or running.
 
     JSONB ``->>`` works on Postgres but not SQLite; rather than branch on
     dialect we filter inflight jobs in Python after pulling the small set
-    of queued/running ingest jobs. The cardinality is bounded by
-    ``len(GREENHOUSE_COMPANIES)`` so this is cheap.
+    of queued/running ingest jobs. The cardinality is bounded by the
+    enabled-companies count so this is cheap.
     """
     async with sf() as s:
         enabled = (
@@ -251,7 +226,7 @@ async def main() -> None:
     log.info("worker %s starting concurrency=%d", worker_id, concurrency)
 
     await reclaim_stale_jobs(SessionLocal, after_seconds=60)
-    await _seed_companies(SessionLocal)
+    # Companies are seeded by Alembic migration 0012; no boot-time seed.
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()

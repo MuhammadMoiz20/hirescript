@@ -188,8 +188,13 @@ class Job(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+    # Identity is (slug, source) — see migration 0012 for the constraint
+    # broadening rationale (linear:greenhouse vs linear:ashby etc).
+    __table_args__ = (
+        UniqueConstraint("slug", "source", name="uq_companies_slug_source"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="greenhouse"
