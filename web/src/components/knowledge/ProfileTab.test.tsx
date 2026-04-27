@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import Profile from "./Profile";
+import ProfileTab from "./ProfileTab";
 import { beforeEach, vi } from "vitest";
 
 const mockApi = vi.hoisted(() => ({
@@ -7,7 +7,7 @@ const mockApi = vi.hoisted(() => ({
   putProfile: vi.fn(),
 }));
 
-vi.mock("../api", () => ({ api: mockApi }));
+vi.mock("../../api", () => ({ api: mockApi }));
 
 const baseProfile = {
   legal_name: "Existing",
@@ -40,14 +40,14 @@ beforeEach(() => {
 });
 
 test("renders existing profile values in the form", async () => {
-  render(<Profile />);
+  render(<ProfileTab />);
   await waitFor(() => expect(screen.getByDisplayValue("Existing")).toBeInTheDocument());
   expect(screen.getByDisplayValue("user@example.com")).toBeInTheDocument();
 });
 
 test("editing a field and clicking Save calls putProfile with the new payload", async () => {
   mockApi.putProfile.mockImplementation(async (p) => p);
-  render(<Profile />);
+  render(<ProfileTab />);
   const legal = await screen.findByLabelText(/legal name/i);
   fireEvent.change(legal, { target: { value: "New Name" } });
   fireEvent.click(screen.getAllByRole("button", { name: /^save$/i })[0]);
@@ -62,7 +62,7 @@ test("server 422 with field error renders an inline error", async () => {
     status: 422,
     detail: [{ loc: ["body", "email"], msg: "value is not a valid email address" }],
   });
-  render(<Profile />);
+  render(<ProfileTab />);
   const email = await screen.findByLabelText(/^email$/i);
   fireEvent.change(email, { target: { value: "not-an-email" } });
   fireEvent.click(screen.getAllByRole("button", { name: /^save$/i })[0]);

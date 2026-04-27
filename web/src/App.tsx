@@ -3,8 +3,7 @@ import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import Login from "./routes/Login";
 import ResumeList from "./routes/ResumeList";
 import Editor from "./routes/Editor";
-import Profile from "./routes/Profile";
-import Knowledge from "./routes/Knowledge";
+import Knowledge, { type KnowledgeTab } from "./routes/Knowledge";
 import OnboardingChat from "./routes/OnboardingChat";
 import Inbox from "./routes/Inbox";
 import Queue from "./routes/Queue";
@@ -26,7 +25,6 @@ export type View =
   | "overview"
   | "list"
   | "editor"
-  | "profile"
   | "knowledge"
   | "inbox"
   | "applications"
@@ -46,10 +44,10 @@ function viewToNavKey(view: View): NavKey | null {
       return "library";
     case "editor":
       return "editor";
-    case "profile":
     case "knowledge":
     case "onboarding":
-      // Phase C will collapse Profile + onboarding chat into Knowledge.
+      // Phase C collapsed Profile into Knowledge tabs (T14). Onboarding
+      // still routes here until T15 relocates it as a side panel.
       return "knowledge";
     case "inbox":
       return "inbox";
@@ -80,8 +78,6 @@ function viewToBreadcrumb(view: View): { section: string; route?: string } {
       return { section: "Per-job", route: "Library" };
     case "editor":
       return { section: "Per-job", route: "Editor" };
-    case "profile":
-      return { section: "Knowledge", route: "Profile" };
     case "knowledge":
       return { section: "Knowledge", route: "Knowledge" };
     case "onboarding":
@@ -108,6 +104,7 @@ function viewToBreadcrumb(view: View): { section: string; route?: string } {
 function StateApp() {
   const [openId, setOpenId] = useState<number | null>(null);
   const [view, setView] = useState<View>("overview");
+  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("profile");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [unreadJobs, setUnreadJobs] = useState(0);
   const navigate = useNavigate();
@@ -252,10 +249,8 @@ function StateApp() {
     <Overview />
   ) : view === "list" ? (
     <ResumeList onOpen={(id) => { setOpenId(id); setView("list"); }} />
-  ) : view === "profile" ? (
-    <Profile onBack={goList} />
   ) : view === "knowledge" ? (
-    <Knowledge onBack={goList} />
+    <Knowledge onBack={goList} tab={knowledgeTab} onTabChange={setKnowledgeTab} />
   ) : view === "onboarding" ? (
     <OnboardingChat onBack={goList} />
   ) : view === "inbox" ? (
