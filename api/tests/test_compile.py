@@ -1,3 +1,5 @@
+import textwrap
+
 from app.services.compile import (
     compile_latex, CompileError, CompileResult, OverflowHint, parse_overflows,
 )
@@ -158,3 +160,45 @@ def test_parse_overflows_handles_triple_angle_in_text():
     hints = parse_overflows(log)
     assert len(hints) == 1
     assert hints[0].snippet == "a"
+
+
+_LONG_BULLET = (
+    "Optimized PostgreSQL via connection pooling, reducing p95 query "
+    "latency by 50\\% and improving overall platform performance across "
+    "every region of the deployment fleet."
+)
+
+
+def _minimal_resume(item_text: str) -> str:
+    # Minimal Jake's-resume-like skeleton with a single \resumeItem.
+    return textwrap.dedent(rf"""
+    \documentclass[letterpaper,10pt]{{article}}
+    \usepackage[margin=0.5in]{{geometry}}
+    \usepackage{{enumitem}}
+    \newcommand{{\resumeItem}}[1]{{\item\small{{#1}}}}
+    \newcommand{{\resumeItemListStart}}{{\begin{{itemize}}[leftmargin=0.15in]}}
+    \newcommand{{\resumeItemListEnd}}{{\end{{itemize}}}}
+    \begin{{document}}
+    \resumeItemListStart
+    \resumeItem{{ {item_text} }}
+    \resumeItemListEnd
+    \end{{document}}
+    """).strip()
+
+
+def test_compile_emits_wrap_hint_for_long_resume_item():
+    src = _minimal_resume(_LONG_BULLET)
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert len(result.overflows) >= 1
+    wrap = next((h for h in result.overflows
+                 if "Optimized PostgreSQL" in h.snippet), None)
+    assert wrap is not None, f"expected wrap hint, got {result.overflows!r}"
+    assert wrap.overflow_pt > 0
+
+
+def test_compile_no_wrap_hint_for_short_resume_item():
+    src = _minimal_resume("Short bullet that fits on one line easily.")
+    result = compile_latex(src)
+    assert result.page_count == 1
+    assert all("Short bullet" not in h.snippet for h in result.overflows)

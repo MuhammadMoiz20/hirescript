@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from pypdf import PdfReader
 
+from app.services.latex_shim import WRAP_SHIM
+
 class CompileError(RuntimeError):
     def __init__(self, stderr: str):
         super().__init__(stderr)
@@ -62,7 +64,27 @@ def parse_overflows(log: str) -> tuple[OverflowHint, ...]:
     reason about them positionally.
     """
     hints: list[tuple[int, OverflowHint]] = []
-    lines = log.splitlines()
+    # TeX wraps log output at ~79 chars (max_print_line), so a long
+    # HS_WRAP: ... text=<<<...>>> emission spans multiple physical lines.
+    # Reassemble each HS_WRAP entry into a single logical line before
+    # scanning, while keeping non-HS_WRAP lines untouched so the
+    # Overfull \\hbox snippet-extraction below still works.
+    raw_lines = log.splitlines()
+    lines: list[str] = []
+    i = 0
+    while i < len(raw_lines):
+        cur = raw_lines[i]
+        if cur.lstrip().startswith("HS_WRAP:") and ">>>" not in cur:
+            joined = cur
+            j = i + 1
+            while j < len(raw_lines) and ">>>" not in joined:
+                joined += raw_lines[j]
+                j += 1
+            lines.append(joined)
+            i = j
+            continue
+        lines.append(cur)
+        i += 1
     for idx, line in enumerate(lines):
         m = _OVERFULL_RE.search(line)
         if m:
@@ -121,12 +143,14 @@ _INPUT_STUBS: dict[str, str] = {
 
 
 def _inject_shim(source: str) -> str:
-    """Insert the pdfTeX shim immediately before \\documentclass (or at the
-    start if no \\documentclass is present)."""
+    """Insert the pdfTeX compatibility shim and the wrap-detection shim
+    immediately before \\documentclass (or at the start if no
+    \\documentclass is present)."""
+    combined = _PDFTEX_SHIM + WRAP_SHIM
     match = re.search(r"\\documentclass", source)
     if not match:
-        return _PDFTEX_SHIM + source
-    return source[: match.start()] + _PDFTEX_SHIM + source[match.start():]
+        return combined + source
+    return source[: match.start()] + combined + source[match.start():]
 
 
 def compile_latex(source: str, timeout: int = 30) -> CompileResult:
@@ -137,7 +161,7 @@ def compile_latex(source: str, timeout: int = 30) -> CompileResult:
         tex_file = tmp_path / "doc.tex"
         tex_file.write_text(_inject_shim(source))
         result = subprocess.run(
-            ["tectonic", "-X", "compile", "--outdir", str(tmp_path), str(tex_file)],
+            ["tectonic", "-X", "compile", "--keep-logs", "--outdir", str(tmp_path), str(tex_file)],
             capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
