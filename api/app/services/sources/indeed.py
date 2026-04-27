@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = ["IndeedSource", "indeed_source", "INDEED_BASE"]
 
@@ -173,6 +173,15 @@ class IndeedSource:
         finally:
             await page.close()
         return _parse_view_html(html, jk=jk, url=url)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 async def _default_page_factory():  # pragma: no cover - real browser path

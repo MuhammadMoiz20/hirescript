@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "LeverSource",
@@ -160,6 +160,15 @@ class LeverSource:
             # Some endpoints wrap a single posting in a list; pick the first.
             raw = raw[0] if raw else {}
         return _normalize_one(raw)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 lever_source = LeverSource()

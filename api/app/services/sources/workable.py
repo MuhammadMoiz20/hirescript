@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "WorkableSource",
@@ -191,6 +191,15 @@ class WorkableSource:
         slug, shortcode = parsed
         detail = await _fetch_detail(slug, shortcode, http=http)
         return _normalize_one(detail, slug=slug)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 workable_source = WorkableSource()

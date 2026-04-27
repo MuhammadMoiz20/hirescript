@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = ["WellfoundSource", "wellfound_source", "WELLFOUND_BASE"]
 
@@ -169,6 +169,15 @@ class WellfoundSource:
         finally:
             await page.close()
         return _parse_view_html(html, jid=jid, url=url)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 async def _default_page_factory():  # pragma: no cover - real browser path

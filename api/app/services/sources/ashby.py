@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.services.sources.greenhouse import _strip_html
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 __all__ = [
     "AshbySource",
@@ -137,6 +137,15 @@ class AshbySource:
         raise ValueError(
             f"ashby posting id {posting_id!r} not found on board {slug!r}"
         )
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 ashby_source = AshbySource()

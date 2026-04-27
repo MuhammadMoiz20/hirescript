@@ -14,12 +14,30 @@ done".
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 import httpx
 
 
 TosRisk = Literal["clean", "high"]
+
+
+class CoverLetterRequirement(str, Enum):
+    """Whether the application form expects a cover letter.
+
+    UNKNOWN is the safe default — the prepare flow generates one anyway,
+    because shipping with a CL when the form has none costs nothing, but
+    skipping when it's required blocks submit.
+    """
+
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    NOT_PRESENT = "not_present"
+    UNKNOWN = "unknown"
+
+    def should_generate(self) -> bool:
+        return self is not CoverLetterRequirement.NOT_PRESENT
 
 
 class NormalizedPosting(TypedDict):
@@ -76,4 +94,13 @@ class Source(Protocol):
         """Fetch a single posting by URL.
 
         Raises ``ValueError`` when ``url`` does not match this source.
+        """
+
+    async def probe_cover_letter(
+        self, posting_meta: dict[str, Any], apply_url: str, *, http: httpx.AsyncClient
+    ) -> CoverLetterRequirement:
+        """Inspect the application form for this posting.
+
+        Implementations should never raise — return ``UNKNOWN`` on any
+        network/parse failure so prepare always proceeds.
         """

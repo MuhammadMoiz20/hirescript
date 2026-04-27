@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import JobPosting
-from app.services.sources.protocol import NormalizedPosting
+from app.services.sources.protocol import CoverLetterRequirement, NormalizedPosting
 
 # Re-export NormalizedPosting so existing imports keep working.
 __all__ = [
@@ -275,6 +275,15 @@ class GreenhouseSource:
         resp.raise_for_status()
         raw = resp.json() or {}
         return _normalize_one(raw)
+
+    async def probe_cover_letter(
+        self,
+        posting_meta: dict[str, Any],
+        apply_url: str,
+        *,
+        http: httpx.AsyncClient,
+    ) -> CoverLetterRequirement:
+        return CoverLetterRequirement.UNKNOWN
 
 
 # Module-level instance — the registry imports this name.
