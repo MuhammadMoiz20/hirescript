@@ -85,6 +85,12 @@ test("renders empty state when there are no notifications", () => {
   expect(document.querySelector("[data-part='section-earlier']")).toBeNull();
 });
 
+test("empty state uses bundle microcopy 'All caught up'", () => {
+  setup({ notifications: [] });
+  expect(screen.getByTestId("notifications-empty")).toBeInTheDocument();
+  expect(screen.getByText(/all caught up/i)).toBeInTheDocument();
+});
+
 test("dismiss button fires onDismiss with the notification id", () => {
   const onDismiss = vi.fn();
   setup({ onDismiss });

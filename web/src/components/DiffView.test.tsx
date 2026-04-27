@@ -12,6 +12,13 @@ const defaultProps = {
   onReject: () => {},
 };
 
+test("renders empty-state copy when proposed equals current", () => {
+  const same = "\\documentclass{article}\\begin{document}hi\\end{document}\n";
+  render(<DiffView {...defaultProps} currentLatex={same} proposedLatex={same} />);
+  expect(screen.getByTestId("diff-empty")).toBeInTheDocument();
+  expect(screen.getByText(/no changes to review/i)).toBeInTheDocument();
+});
+
 test("shows green 1-page badge when enforced", () => {
   render(<DiffView {...defaultProps} />);
   expect(screen.getAllByText(/1 page/i).length).toBeGreaterThan(0);

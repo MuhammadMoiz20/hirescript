@@ -176,3 +176,12 @@ test("Sources tab shows the Job-source families empty state", async () => {
   await waitFor(() => expect(screen.getByTestId("job-source-families-empty")).toBeInTheDocument());
   expect(screen.getByTestId("job-source-families-empty").textContent).toMatch(/Slice 4/);
 });
+
+test("Documents tab shows bundle empty-state copy when no docs", async () => {
+  mockApi.getKbDocuments.mockResolvedValue({ items: [], total: 0 });
+  render(<Knowledge tab="documents" />);
+  // Bundle microcopy: "No KB documents yet / Connect Notion, GitHub, or paste markdown to index."
+  await waitFor(() => expect(screen.getByTestId("documents-empty")).toBeInTheDocument());
+  expect(screen.getByText(/no kb documents yet/i)).toBeInTheDocument();
+  expect(screen.getByText(/connect notion/i)).toBeInTheDocument();
+});

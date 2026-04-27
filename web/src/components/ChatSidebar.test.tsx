@@ -18,6 +18,13 @@ vi.mock("../api", () => {
   return { api: { streamEdit }, streamEdit };
 });
 
+test("renders bundle empty-state copy when no messages yet", () => {
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  // Bundle voice: matter-of-fact, action-oriented prompt for the chat rail.
+  expect(screen.getByText(/Ask Claude/i)).toBeInTheDocument();
+  expect(screen.getByText(/reviewable diff/i)).toBeInTheDocument();
+});
+
 test("renders streamed tokens and calls onProposed when result arrives", async () => {
   const onProposed = vi.fn();
   render(<ChatSidebar resumeId={1} onProposed={onProposed} />);

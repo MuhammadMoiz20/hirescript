@@ -257,6 +257,25 @@ export default function DiffView({
 
       {/* Side-by-side diff with numbered hotspot gutter */}
       <div style={{ flex: 1, overflow: "auto" }}>
+        {diffSize === 0 && (
+          <div
+            data-testid="diff-empty"
+            role="status"
+            style={{
+              padding: "32px 20px",
+              textAlign: "center",
+              color: "var(--ink-3)",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <div className="mono" aria-hidden style={{ fontSize: 22, marginBottom: 8 }}>≡</div>
+            <div className="serif" style={{ fontSize: 16, color: "var(--ink)", marginBottom: 4 }}>
+              No changes to review
+            </div>
+            <div>The proposed LaTeX matches the current source line-for-line.</div>
+          </div>
+        )}
         <div
           style={{
             display: "grid",

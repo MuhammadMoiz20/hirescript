@@ -23,6 +23,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, Posting, PostingDetail } from "../api";
+import EmptyState from "../components/ui/EmptyState";
+import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import TopChrome from "../components/ui/TopChrome";
 import Button from "../components/ui/Button";
 import PostingCard, { POSTING_ROW_COLUMNS } from "../components/PostingCard";
@@ -372,22 +374,25 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
 
           <div style={{ flex: 1, overflowY: "auto" }}>
             {loading && postings.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)" }}>Loading postings…</div>
+              <div style={{ padding: 16 }} data-testid="inbox-loading">
+                <LoadingSkeleton rows={6} height={44} ariaLabel="Loading postings" />
+              </div>
             ) : filtered.length === 0 ? (
-              <div
-                style={{
-                  margin: 24,
-                  border: "1px dashed var(--rule)",
-                  borderRadius: 3,
-                  padding: 28,
-                  textAlign: "center",
-                  fontSize: 13,
-                  color: "var(--ink-3)",
-                }}
-              >
-                {postings.length === 0
-                  ? "No postings yet. Greenhouse ingestion runs periodically; check back soon."
-                  : "No postings match the current filters."}
+              <div style={{ margin: 24 }} data-testid="inbox-empty">
+                {postings.length === 0 ? (
+                  <EmptyState
+                    glyph="◌"
+                    title="Nothing new today"
+                    body="Sources polled a few minutes ago. Greenhouse ingestion runs periodically."
+                  />
+                ) : (
+                  <EmptyState
+                    glyph="◐"
+                    title="No postings match the current filters"
+                    body="Loosen a status, tier, or source chip to see more."
+                    variant="inline"
+                  />
+                )}
               </div>
             ) : (
               <>

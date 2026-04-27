@@ -100,7 +100,9 @@ test("shows empty state when no postings", async () => {
   mockApi.listPostings.mockResolvedValue({ items: [], total: 0 });
   renderInbox();
   await waitFor(() => expect(mockApi.listPostings).toHaveBeenCalled());
-  expect(await screen.findByText(/no postings yet/i)).toBeInTheDocument();
+  // Bundle microcopy: "Nothing new today. Sources polled ..."
+  expect(await screen.findByText(/nothing new today/i)).toBeInTheDocument();
+  expect(screen.getByTestId("inbox-empty")).toBeInTheDocument();
 });
 
 test("clicking a row opens the detail drawer", async () => {

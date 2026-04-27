@@ -332,17 +332,40 @@ export default function NotificationsDrawer({
           {sorted.length === 0 && (
             <div
               data-part="empty"
+              data-testid="notifications-empty"
               style={{
-                padding: "32px 20px",
-                fontFamily: "var(--f-mono)",
-                fontSize: 11,
-                color: "var(--ink-4)",
+                padding: "40px 20px",
                 textAlign: "center",
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
+                color: "var(--ink-3)",
               }}
             >
-              No notifications
+              <div
+                aria-hidden
+                className="mono"
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 24,
+                  color: "var(--ink-3)",
+                  marginBottom: 10,
+                  lineHeight: 1,
+                }}
+              >
+                ✓
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--f-serif)",
+                  fontSize: 16,
+                  color: "var(--ink)",
+                  letterSpacing: "-0.01em",
+                  marginBottom: 4,
+                }}
+              >
+                All caught up
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
+                No notifications. The agent will surface anything that needs you.
+              </div>
             </div>
           )}
           {fresh.length > 0 && (

@@ -15,6 +15,19 @@ vi.mock("../../api", () => ({
 
 function noop() {}
 
+test("renders bundle empty-state copy when there is no history", () => {
+  render(
+    <OnboardingChatPanel
+      collapsed={false}
+      onToggleCollapsed={noop}
+      initialHistory={[]}
+    />,
+  );
+  expect(
+    screen.getByText(/send a message to start/i),
+  ).toBeInTheDocument();
+});
+
 test("renders existing history when expanded", async () => {
   render(
     <OnboardingChatPanel

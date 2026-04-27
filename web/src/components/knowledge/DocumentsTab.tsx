@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, KbDocumentItem } from "../../api";
 import Button from "../ui/Button";
+import EmptyState from "../ui/EmptyState";
+import LoadingSkeleton from "../ui/LoadingSkeleton";
 
 const SOURCE_LABELS: Record<string, string> = {
   latex_master: "Master LaTeX",
@@ -130,20 +132,14 @@ export default function DocumentsTab() {
       </div>
 
       {loading && docs.length === 0 ? (
-        <div style={{ fontSize: 13, color: "var(--ink-3)" }}>Loading documents…</div>
+        <LoadingSkeleton rows={4} height={36} testid="documents-loading" ariaLabel="Loading documents" />
       ) : docs.length === 0 ? (
-        <div
-          style={{
-            border: "1px dashed var(--rule)",
-            borderRadius: 3,
-            padding: 20,
-            textAlign: "center",
-            fontSize: 13,
-            color: "var(--ink-3)",
-          }}
-        >
-          No documents yet. Sync a source from the Sources tab to ingest.
-        </div>
+        <EmptyState
+          glyph="◐"
+          title="No KB documents yet"
+          body="Connect Notion, GitHub, or paste markdown to index. Sync a source from the Sources tab to ingest."
+          testid="documents-empty"
+        />
       ) : (
         <div
           style={{
