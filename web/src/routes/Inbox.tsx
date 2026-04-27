@@ -62,19 +62,9 @@ const TIER_CHIPS: Array<ChipOpt<string>> = [
 // cover the five ingest sources the backend produces.
 const SOURCE_ALL = "all";
 
-// Static label map; dynamic tos_risk comes from `GET /sources` so the
-// badge always reflects the backend registry.
-const SOURCE_LABELS: Record<string, string> = {
-  greenhouse: "Greenhouse",
-  lever: "Lever",
-  ashby: "Ashby",
-  workable: "Workable",
-  linkedin: "LinkedIn",
-  indeed: "Indeed",
-  wellfound: "Wellfound",
-  gmail_digest: "Gmail digest",
-};
-
+// Source chip options. Display labels live here; the dynamic `tos_risk`
+// badge comes from `GET /sources` so the chip always reflects the
+// backend registry.
 const SOURCE_CHIPS: Array<ChipOpt<string>> = [
   { id: SOURCE_ALL, label: "All" },
   { id: "greenhouse", label: "Greenhouse" },
