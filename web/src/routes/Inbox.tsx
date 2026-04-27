@@ -299,16 +299,23 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
                   : "No postings match the current filters."}
               </div>
             ) : (
-              filtered.map((p) => (
-                <PostingCard
-                  key={p.id}
-                  posting={p}
-                  onClick={setDrawerId}
-                  onPrepare={handlePrepare}
-                  onSkip={handleSkip}
-                  preparing={preparingId === p.id}
-                />
-              ))
+              <>
+                {filtered.map((p) => (
+                  <PostingCard
+                    key={p.id}
+                    posting={p}
+                    onClick={setDrawerId}
+                    onPrepare={handlePrepare}
+                    onSkip={handleSkip}
+                    preparing={preparingId === p.id}
+                  />
+                ))}
+                {total > postings.length && (
+                  <div style={{ padding: "12px", color: "var(--ink-3)", textAlign: "center", fontSize: 12 }}>
+                    Showing first {postings.length} of {total}. Refine filters to narrow.
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -392,22 +399,15 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
                     </div>
                   )}
                   <div className="eyebrow" style={{ marginBottom: 6 }}>Description</div>
-                  {detail.description_html ? (
-                    <div
-                      style={{ fontSize: 13, lineHeight: 1.5 }}
-                      dangerouslySetInnerHTML={{ __html: detail.description_html }}
-                    />
-                  ) : (
-                    <pre style={{
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--f-sans)",
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                      margin: 0,
-                    }}>
-                      {detail.description_text}
-                    </pre>
-                  )}
+                  <pre style={{
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}>
+                    {detail.description_text}
+                  </pre>
                 </div>
               ) : (
                 <div style={{ fontSize: 13, color: "var(--ink-3)" }}>No detail loaded.</div>

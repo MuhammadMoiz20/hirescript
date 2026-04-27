@@ -8,6 +8,7 @@ interface Props {
   onSubmit: (id: number) => void;
   onCancel: (id: number) => void;
   submitting?: boolean;
+  cancelling?: boolean;
 }
 
 function fmtElapsed(iso: string | null): string {
@@ -31,7 +32,7 @@ const STATUS_COLORS: Record<string, string> = {
   pending: "#92400e",
 };
 
-export default function ApplicationCard({ application, onSubmit, onCancel, submitting }: Props) {
+export default function ApplicationCard({ application, onSubmit, onCancel, submitting, cancelling }: Props) {
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,30 +191,49 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setEditingCover((v) => !v)}
+                onClick={() => {
+                  setEditingCover((v) => {
+                    const next = !v;
+                    if (!next) {
+                      // Exiting edit mode: discard draft, reset to source.
+                      setCoverDraft(detail?.cover_letter_text || application.cover_letter_text || "");
+                    }
+                    return next;
+                  });
+                }}
               >
-                {editingCover ? "Done" : "Edit cover letter"}
+                {editingCover ? "Done" : "Edit (preview only)"}
               </Button>
             </div>
             {editingCover ? (
-              <textarea
-                value={coverDraft}
-                onChange={(e) => setCoverDraft(e.target.value)}
-                aria-label="Cover letter editor"
-                rows={10}
-                style={{
-                  width: "100%",
-                  fontFamily: "var(--f-sans)",
-                  fontSize: 13,
-                  lineHeight: 1.5,
-                  border: "1px solid var(--rule-strong)",
-                  borderRadius: 3,
-                  padding: 8,
-                  background: "var(--paper)",
-                  color: "var(--ink)",
-                  resize: "vertical",
-                }}
-              />
+              <>
+                <div style={{
+                  fontSize: 11.5,
+                  color: "var(--ink-3)",
+                  marginBottom: 6,
+                  fontStyle: "italic",
+                }}>
+                  Edits are not saved or submitted yet. Submit will use the original cover letter.
+                </div>
+                <textarea
+                  value={coverDraft}
+                  onChange={(e) => setCoverDraft(e.target.value)}
+                  aria-label="Cover letter editor"
+                  rows={10}
+                  style={{
+                    width: "100%",
+                    fontFamily: "var(--f-sans)",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    border: "1px solid var(--rule-strong)",
+                    borderRadius: 3,
+                    padding: 8,
+                    background: "var(--paper)",
+                    color: "var(--ink)",
+                    resize: "vertical",
+                  }}
+                />
+              </>
             ) : (
               <pre style={{
                 whiteSpace: "pre-wrap",
@@ -223,7 +243,7 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
                 margin: 0,
                 color: "var(--ink)",
               }}>
-                {coverDraft || application.cover_letter_text || "(none)"}
+                {application.cover_letter_text || "(none)"}
               </pre>
             )}
           </section>
@@ -270,12 +290,13 @@ export default function ApplicationCard({ application, onSubmit, onCancel, submi
         <Button
           size="sm"
           variant="ghost"
+          disabled={cancelling}
           onClick={() => {
             const ok = window.confirm("Cancel this application? This will delete it.");
             if (ok) onCancel(application.id);
           }}
         >
-          Cancel application
+          {cancelling ? "Cancelling…" : "Cancel application"}
         </Button>
         <div style={{ flex: 1 }} />
         {detail?.canonical_key && (

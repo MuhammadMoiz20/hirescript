@@ -23,10 +23,12 @@ export default function Applications({ onBack, navigateOverride }: Props) {
   const go = navigateOverride || ((p: string) => navigate(p));
 
   const [items, setItems] = useState<Application[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("prepared");
   const [submittingId, setSubmittingId] = useState<number | null>(null);
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
 
   async function refresh(filter = statusFilter) {
     setLoading(true);
@@ -37,6 +39,7 @@ export default function Applications({ onBack, navigateOverride }: Props) {
         limit: 200,
       });
       setItems(list.items);
+      setTotal(list.total);
     } catch (e: any) {
       setError(e?.detail ? String(e.detail) : e?.message || "Failed to load applications");
     } finally {
@@ -62,11 +65,15 @@ export default function Applications({ onBack, navigateOverride }: Props) {
   }
 
   async function handleCancel(id: number) {
+    setCancellingId(id);
     try {
       await api.deleteApplication(id);
       setItems((prev) => prev.filter((a) => a.id !== id));
+      setTotal((t) => Math.max(0, t - 1));
     } catch (e: any) {
       setError(e?.detail ? String(e.detail) : e?.message || "Cancel failed");
+    } finally {
+      setCancellingId(null);
     }
   }
 
@@ -154,15 +161,23 @@ export default function Applications({ onBack, navigateOverride }: Props) {
               No applications in this status. Prepare one from the Inbox to get started.
             </div>
           ) : (
-            items.map((app) => (
-              <ApplicationCard
-                key={app.id}
-                application={app}
-                onSubmit={handleSubmit}
-                onCancel={handleCancel}
-                submitting={submittingId === app.id}
-              />
-            ))
+            <>
+              {items.map((app) => (
+                <ApplicationCard
+                  key={app.id}
+                  application={app}
+                  onSubmit={handleSubmit}
+                  onCancel={handleCancel}
+                  submitting={submittingId === app.id}
+                  cancelling={cancellingId === app.id}
+                />
+              ))}
+              {total > items.length && (
+                <div style={{ padding: "12px", color: "var(--ink-3)", textAlign: "center", fontSize: 12 }}>
+                  Showing first {items.length} of {total}. Refine filters to narrow.
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
