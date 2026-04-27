@@ -115,3 +115,46 @@ def test_compile_shim_does_not_clobber_engine_primitives():
     compile_latex(doc)
     result = compile_latex(doc)
     assert result.page_count == 1
+
+
+def test_parse_overflows_extracts_wrap_hint():
+    log = (
+        "Some preamble\n"
+        "HS_WRAP: line=87 over=14.20pt limit=396.00pt text=<<<Optimized PostgreSQL via connection pooling, reducing p95 query latency by 50%.>>>\n"
+        "Trailing junk\n"
+    )
+    hints = parse_overflows(log)
+    assert len(hints) == 1
+    h = hints[0]
+    assert h.line_start == 87
+    assert h.line_end == 87
+    assert h.overflow_pt == 14.20
+    assert "Optimized PostgreSQL" in h.snippet
+
+
+def test_parse_overflows_merges_hbox_and_wrap_in_source_order():
+    log = (
+        "Overfull \\hbox (5.00pt too wide) in paragraph at lines 12--13\n"
+        "[]\\OT1/cmr/m/n/10.95 some overfull text fragment\n"
+        "HS_WRAP: line=42 over=8.00pt limit=396.00pt text=<<<a wrapped bullet>>>\n"
+    )
+    hints = parse_overflows(log)
+    assert len(hints) == 2
+    assert hints[0].line_start == 12
+    assert hints[0].overflow_pt == 5.0
+    assert hints[1].line_start == 42
+    assert hints[1].snippet == "a wrapped bullet"
+
+
+def test_parse_overflows_drops_malformed_wrap_line():
+    log = "HS_WRAP: this line is malformed and should be ignored\n"
+    assert parse_overflows(log) == ()
+
+
+def test_parse_overflows_handles_triple_angle_in_text():
+    # If a bullet legitimately contains '>>>', the non-greedy match takes
+    # the first closing '>>>'. We accept slight truncation; we never crash.
+    log = "HS_WRAP: line=5 over=1.00pt limit=10.00pt text=<<<a>>>extra>>>\n"
+    hints = parse_overflows(log)
+    assert len(hints) == 1
+    assert hints[0].snippet == "a"

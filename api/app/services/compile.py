@@ -33,6 +33,11 @@ _OVERFULL_RE = re.compile(
 )
 
 
+_WRAP_RE = re.compile(
+    r"HS_WRAP: line=(\d+) over=([\d.]+)pt limit=([\d.]+)pt text=<<<(.*?)>>>"
+)
+
+
 def _strip_tex_font_prefix(line: str) -> str:
     """Tectonic prints offending lines like '[]\\OT1/cmr/m/n/10.95 the actual text'.
     Strip the bracket and font-spec prefix so the LLM sees readable prose."""
@@ -45,34 +50,48 @@ def _strip_tex_font_prefix(line: str) -> str:
 
 
 def parse_overflows(log: str) -> tuple[OverflowHint, ...]:
-    """Extract Overfull \\hbox warnings from Tectonic's combined log output.
+    """Extract overflow hints from Tectonic's combined log output.
 
-    The next line in the log after the warning header typically echoes the
-    offending text fragment with TeX font selectors prepended; we capture and
-    clean it so the LLM has a usable snippet."""
-    hints: list[OverflowHint] = []
+    Two sources:
+      * Overfull \\hbox warnings — emitted by TeX when a line cannot be broken
+        and exceeds \\hsize.
+      * HS_WRAP: ... lines — emitted by our preamble shim when a bullet or
+        skill row's measured width exceeds \\linewidth, indicating a soft
+        wrap that TeX silently broke at a space.
+    Hints are returned in the order they appear in the log so callers can
+    reason about them positionally.
+    """
+    hints: list[tuple[int, OverflowHint]] = []
     lines = log.splitlines()
     for idx, line in enumerate(lines):
         m = _OVERFULL_RE.search(line)
-        if not m:
-            continue
-        snippet = ""
-        for j in range(idx + 1, min(idx + 4, len(lines))):
-            candidate = lines[j].strip()
-            if not candidate:
-                continue
-            if candidate.startswith("[]") or candidate.startswith("\\"):
-                snippet = _strip_tex_font_prefix(candidate)
-                break
-        hints.append(
-            OverflowHint(
+        if m:
+            snippet = ""
+            for j in range(idx + 1, min(idx + 4, len(lines))):
+                candidate = lines[j].strip()
+                if not candidate:
+                    continue
+                if candidate.startswith("[]") or candidate.startswith("\\"):
+                    snippet = _strip_tex_font_prefix(candidate)
+                    break
+            hints.append((idx, OverflowHint(
                 overflow_pt=float(m.group(1)),
                 line_start=int(m.group(2)),
                 line_end=int(m.group(3)),
                 snippet=snippet,
-            )
-        )
-    return tuple(hints)
+            )))
+            continue
+        w = _WRAP_RE.search(line)
+        if w:
+            line_no = int(w.group(1))
+            hints.append((idx, OverflowHint(
+                overflow_pt=float(w.group(2)),
+                line_start=line_no,
+                line_end=line_no,
+                snippet=w.group(4),
+            )))
+    hints.sort(key=lambda pair: pair[0])
+    return tuple(h for _, h in hints)
 
 
 # Shim for pdfTeX-only primitives so resumes written for pdflatex (Jake's,
