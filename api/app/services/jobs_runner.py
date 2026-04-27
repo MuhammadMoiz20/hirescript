@@ -53,13 +53,18 @@ from app.models import (
     Profile as ProfileModel,
     Resume,
     ResumeVersion,
+    Tier,
 )
 from app.schemas.profile import Profile
-from app.services import answer_cache
+from app.services import answer_cache, notifications
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
-from app.services.jobs_repo import emit_event, enqueue_classify_posting
+from app.services.jobs_repo import (
+    count_submitted_today_for_tier,
+    emit_event,
+    enqueue_classify_posting,
+)
 from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
@@ -1019,6 +1024,88 @@ def _truncate_confirmation(html: str) -> str:
     )
 
 
+_CAPTCHA_SCREENSHOT_DIR = "/app/compiled_pdfs/submit_screenshots"
+
+
+def _make_captcha_handler(
+    sf: SessionFactory, *, application_id: int
+) -> Callable[[dict[str, Any]], Awaitable[None]]:
+    """Build the ``on_captcha`` callback used during A-mode submits.
+
+    The callback persists the captcha screenshot to the same volume
+    B-mode uses for confirmation screenshots, flips the application row
+    to ``status='captcha_pause'``, and emits an in-app + ntfy
+    notification. The adapter then raises :class:`CaptchaPauseRequired`
+    which the runner catches without marking the job failed.
+    """
+
+    async def _handle(ctx: dict[str, Any]) -> None:
+        os.makedirs(_CAPTCHA_SCREENSHOT_DIR, exist_ok=True)
+        ts = int(datetime.now(timezone.utc).timestamp())
+        path = os.path.join(
+            _CAPTCHA_SCREENSHOT_DIR,
+            f"captcha_{application_id}_{ts}.png",
+        )
+        png = ctx.get("screenshot_png") or b""
+        try:
+            with open(path, "wb") as fh:
+                fh.write(png)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha screenshot write failed for application %s",
+                application_id,
+            )
+
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(
+                        status="captcha_pause",
+                        confirmation_screenshot_path=path,
+                    )
+                )
+                user_id_row = (
+                    await s.execute(
+                        select(Application.user_id).where(
+                            Application.id == application_id
+                        )
+                    )
+                ).scalar_one()
+                await s.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha-pause status update failed for application %s",
+                application_id,
+            )
+            user_id_row = 1
+
+        try:
+            async with sf() as s:
+                await notifications.send(
+                    s,
+                    user_id=int(user_id_row),
+                    kind="captcha_pause",
+                    title="Captcha required",
+                    body=(
+                        f"Application {application_id} paused on a "
+                        f"Greenhouse captcha at {ctx.get('url', '')}."
+                    ),
+                    meta={
+                        "application_id": application_id,
+                        "screenshot_path": path,
+                    },
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "captcha-pause notification failed for application %s",
+                application_id,
+            )
+
+    return _handle
+
+
 async def run_submit_application_job(
     sf: SessionFactory, job_id: uuid.UUID
 ) -> None:
@@ -1117,6 +1204,133 @@ async def run_submit_application_job(
             resume_variant_id = app.resume_variant_id
             cover_letter_text = app.cover_letter_text or ""
             form_payload = dict(app.form_payload or {})
+            mode = app.mode
+            posting_tier = posting.tier
+            verify_ok = app.verify_ok
+
+            # --- A-mode policy gates ---------------------------------------
+            # Kill switch: refuse to drive the browser if the operator
+            # disabled autonomous submits. Application stays prepared.
+            if mode == "A" and (
+                os.environ.get("AUTONOMOUS_SUBMIT_DISABLED") == "1"
+            ):
+                await s.commit()
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="disabled",
+                    message="autonomous submit disabled",
+                    data={"application_id": application_id},
+                )
+                async with sf() as s2:
+                    await s2.execute(
+                        update(Job)
+                        .where(Job.id == job_id)
+                        .values(
+                            status="succeeded",
+                            finished_at=datetime.now(timezone.utc),
+                            result={
+                                "application_id": application_id,
+                                "skipped": True,
+                                "reason": "autonomous_submit_disabled",
+                            },
+                        )
+                    )
+                    await s2.commit()
+                return
+
+            # Cap check: re-load the Tier row so a live PATCH on
+            # ``tiers.daily_cap`` takes effect on the next worker tick. A
+            # cap of 0 disables A-mode for the tier.
+            if mode == "A":
+                tier_row: Tier | None = None
+                if posting_tier:
+                    tier_row = (
+                        await s.execute(
+                            select(Tier).where(Tier.slug == posting_tier)
+                        )
+                    ).scalar_one_or_none()
+                cap = tier_row.daily_cap if tier_row is not None else 0
+                if cap <= 0:
+                    today_count = 0
+                else:
+                    today_count = await count_submitted_today_for_tier(
+                        s, tier_slug=posting_tier or ""
+                    )
+                if cap <= 0 or today_count >= cap:
+                    await s.commit()
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="cap_hit",
+                        message="daily cap reached",
+                        data={
+                            "application_id": application_id,
+                            "tier": posting_tier,
+                            "cap": cap,
+                            "today_count": today_count,
+                        },
+                    )
+                    async with sf() as s2:
+                        await s2.execute(
+                            update(Job)
+                            .where(Job.id == job_id)
+                            .values(
+                                status="succeeded",
+                                finished_at=datetime.now(timezone.utc),
+                                result={
+                                    "application_id": application_id,
+                                    "skipped": True,
+                                    "reason": "cap_hit",
+                                    "tier": posting_tier,
+                                    "cap": cap,
+                                    "today_count": today_count,
+                                },
+                            )
+                        )
+                        await s2.commit()
+                    return
+
+                # Verify gate: A-mode refuses to submit unverified or
+                # explicitly-failing materials. Notification fires so the
+                # user can review in the in-app drawer.
+                if verify_ok is False:
+                    await s.commit()
+                    async with sf() as s2:
+                        await notifications.send(
+                            s2,
+                            user_id=app.user_id,
+                            kind="verify_blocked",
+                            title="A-mode submit blocked",
+                            body=(
+                                "Verifier flagged unsupported claims; "
+                                "review the application before submitting."
+                            ),
+                            meta={"application_id": application_id},
+                        )
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="verify_blocked",
+                        message="verify_ok is False",
+                        data={"application_id": application_id},
+                    )
+                    async with sf() as s2:
+                        await s2.execute(
+                            update(Job)
+                            .where(Job.id == job_id)
+                            .values(
+                                status="succeeded",
+                                finished_at=datetime.now(timezone.utc),
+                                result={
+                                    "application_id": application_id,
+                                    "skipped": True,
+                                    "reason": "verify_blocked",
+                                },
+                            )
+                        )
+                        await s2.commit()
+                    return
 
             app.status = "submitting"
             app.error = None
@@ -1161,8 +1375,16 @@ async def run_submit_application_job(
                     sf, job_id, phase=phase, message=None, data=data
                 )
 
+            on_captcha_cb = None
+            if mode == "A":
+                on_captcha_cb = _make_captcha_handler(
+                    sf, application_id=application_id
+                )
+
             result = await greenhouse_submit.submit(
-                ctx, on_progress=on_progress  # type: ignore[arg-type]
+                ctx,
+                on_progress=on_progress,  # type: ignore[arg-type]
+                on_captcha=on_captcha_cb,
             )
 
         # 5. Persist artifacts + flip terminal state.
@@ -1216,6 +1438,39 @@ async def run_submit_application_job(
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
+
+    except greenhouse_submit.CaptchaPauseRequired as exc:
+        # Captcha handler already persisted the screenshot + notification +
+        # set status='captcha_pause'. Mark the job succeeded-with-skip so
+        # the operator queue doesn't fill with spurious failed jobs.
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "skipped": True,
+                            "reason": "captcha_pause",
+                            "url": (exc.ctx or {}).get("url", ""),
+                        },
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="captcha_pause",
+                message="captcha challenge encountered",
+                data={"application_id": application_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "terminal captcha-pause handler failed for job %s", job_id
+            )
 
     except greenhouse_submit.MissingFieldError as exc:
         await _fail_application(

@@ -16,10 +16,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Job, JobEvent
+from app.models import Application, Job, JobEvent, JobPosting
 
 SessionFactory = Callable[[], AsyncSession]
 
@@ -211,6 +211,31 @@ async def enqueue_submit_application(
     )
     await db.flush()
     return job_id
+
+
+async def count_submitted_today_for_tier(
+    db: AsyncSession, *, tier_slug: str
+) -> int:
+    """Return today's (UTC) submitted-application count for ``tier_slug``.
+
+    Used by the autonomous-submit scheduler and the A-mode runner branch to
+    enforce per-tier daily caps. Counts ``Application`` rows joined to
+    ``JobPosting`` on ``posting_id`` where ``posting.tier == tier_slug`` AND
+    ``status == 'submitted'`` AND ``submitted_at >= start of today UTC``.
+    """
+    now = datetime.now(timezone.utc)
+    start_utc = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    stmt = (
+        select(func.count(Application.id))
+        .join(JobPosting, JobPosting.id == Application.posting_id)
+        .where(
+            JobPosting.tier == tier_slug,
+            Application.status == "submitted",
+            Application.submitted_at >= start_utc,
+        )
+    )
+    val = (await db.execute(stmt)).scalar_one()
+    return int(val or 0)
 
 
 async def cancel_job(sf: SessionFactory, job_id: uuid.UUID) -> bool:

@@ -261,6 +261,8 @@ class Application(Base):
     mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="B", default="B"
     )
+    # status values: "prepared" | "submitting" | "submitted"
+    # | "captcha_pause" | "errored" | "duplicate_skipped"
     status: Mapped[str] = mapped_column(Text, nullable=False)
     resume_variant_id: Mapped[int | None] = mapped_column(
         ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True
