@@ -70,7 +70,10 @@ from app.services.sources.greenhouse import (
     fetch_company_jobs,
     upsert_postings,
 )
+from app.services.submit_adapters import agent_submit
 from app.services.submit_adapters import greenhouse as greenhouse_submit
+from app.services.submit_adapters.protocol import AdapterUnsupported
+from app.services.submit_adapters.registry import ADAPTERS
 from app.services.tailor import tailor_resume
 from app.services.tailor_for_application import tailor_for_application
 from app.services import verify
@@ -79,6 +82,19 @@ from app.services.versioning import snapshot_resume_version
 SessionFactory = Callable[[], AsyncSession]
 
 HEARTBEAT_SEC = 10
+
+
+class _NeedsAttention(Exception):
+    """Raised when the runner refuses to drive a submit and the application
+    must be parked for human review.
+
+    Currently used by the agent-fallback path when the application is in
+    A-mode — the browser-agent is B-mode-only this slice, so an unknown-
+    source posting in A-mode lands in ``status='needs_attention'`` for the
+    user to review and either flip to B-mode or re-target. Distinct from a
+    generic ``RuntimeError`` so the handler can write a deterministic error
+    message + status without conflating it with a real failure.
+    """
 
 
 class _NotOnePageError(Exception):
@@ -1491,15 +1507,126 @@ async def run_submit_application_job(
                     sf, application_id=application_id
                 )
 
-            result = await greenhouse_submit.submit(
-                ctx,
-                on_progress=on_progress,  # type: ignore[arg-type]
-                on_captcha=on_captcha_cb,
-            )
+            # Dispatch by ``posting.source``. If no deterministic adapter is
+            # registered for this source — or the adapter explicitly raises
+            # :class:`AdapterUnsupported` for this specific posting — fall
+            # back to the browser-agent submitter. Agent fallback is B-mode
+            # only this slice (Task 5 owns the implementation); an A-mode
+            # application that hits the agent path is parked as
+            # ``needs_attention`` so the user can review before it runs.
+            adapter = ADAPTERS.get(posting.source)
+            agent_result: agent_submit.AgentSubmitResult | None = None
+
+            async def _run_agent_path() -> agent_submit.AgentSubmitResult:
+                if mode == "A":
+                    raise _NeedsAttention(
+                        "agent fallback refuses A-mode; review and "
+                        "confirm in B-mode"
+                    )
+                return await agent_submit.run(
+                    ctx,
+                    on_progress=on_progress,  # type: ignore[arg-type]
+                )
+
+            if adapter is None:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="adapter_missing",
+                    message=f"no adapter for source={posting.source!r}; "
+                    "falling back to agent",
+                    data={"source": posting.source},
+                )
+                agent_result = await _run_agent_path()
+                result = None
+            else:
+                try:
+                    result = await adapter.submit(
+                        ctx,
+                        on_progress=on_progress,  # type: ignore[arg-type]
+                        on_captcha=on_captcha_cb,
+                    )
+                except AdapterUnsupported as exc:
+                    await emit_event(
+                        sf,
+                        job_id,
+                        phase="adapter_unsupported",
+                        message=f"adapter unsupported: {exc}; "
+                        "falling back to agent",
+                        data={"source": posting.source},
+                    )
+                    agent_result = await _run_agent_path()
+                    result = None
 
         # 5. Persist artifacts + flip terminal state.
+        # Agent fallback that paused awaiting user confirmation: park the
+        # row in ``awaiting_confirmation`` and surface artifacts so the
+        # review queue can render the confirm card (Task 6). The runner
+        # does NOT mark the row submitted — the user owns that step.
+        if agent_result is not None and agent_result.get(
+            "awaiting_user_confirmation"
+        ):
+            async with sf() as s:
+                values: dict[str, Any] = {
+                    "status": "awaiting_confirmation",
+                    "confirmation_screenshot_path": agent_result.get(
+                        "screenshot_path"
+                    ),
+                    "error": None,
+                }
+                # Best-effort: model fields added in Task 5 may not exist
+                # yet on every branch. Set them dynamically via SQL builder
+                # so this code path stays compatible with the pre-Task-5
+                # schema.
+                from app.models import Application as _App
+                if hasattr(_App, "agent_session_id"):
+                    values["agent_session_id"] = agent_result.get(
+                        "agent_session_id"
+                    )
+                if hasattr(_App, "awaiting_user_confirmation"):
+                    values["awaiting_user_confirmation"] = True
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(**values)
+                )
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "awaiting_user_confirmation": True,
+                            "form_summary": agent_result.get(
+                                "form_summary", ""
+                            ),
+                        },
+                    )
+                )
+                await s.commit()
+            try:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="awaiting_user_confirmation",
+                    message="agent paused before final submit",
+                    data={"application_id": application_id},
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("emit awaiting_user_confirmation failed")
+            return
+
+        # Either a deterministic adapter completed, or the agent ran to
+        # completion (Task 5 may eventually allow that for trusted forms).
+        completion = result if result is not None else agent_result
+        if completion is None:
+            raise RuntimeError(
+                "submit dispatch produced no result and no agent output"
+            )
         confirmation_html = _truncate_confirmation(
-            result["confirmation_html"]
+            completion.get("confirmation_html", "") or ""
         )
 
         async with sf() as s:
@@ -1508,9 +1635,9 @@ async def run_submit_application_job(
                 .where(Application.id == application_id)
                 .values(
                     status="submitted",
-                    submitted_at=result["submitted_at"],
+                    submitted_at=completion["submitted_at"],
                     confirmation_html=confirmation_html,
-                    confirmation_screenshot_path=result[
+                    confirmation_screenshot_path=completion[
                         "confirmation_screenshot_path"
                     ],
                     error=None,
@@ -1529,10 +1656,11 @@ async def run_submit_application_job(
                     finished_at=datetime.now(timezone.utc),
                     result={
                         "application_id": application_id,
-                        "submitted_at": result["submitted_at"].isoformat(),
-                        "screenshot_path": result[
+                        "submitted_at": completion["submitted_at"].isoformat(),
+                        "screenshot_path": completion[
                             "confirmation_screenshot_path"
                         ],
+                        "via": "agent" if agent_result is not None else "adapter",
                     },
                 )
             )
@@ -1548,6 +1676,56 @@ async def run_submit_application_job(
             )
         except Exception:  # noqa: BLE001
             logger.exception("emit done event failed for job %s", job_id)
+
+    except _NeedsAttention as exc:
+        # Agent path was taken in A-mode; this slice forbids that. Park the
+        # row so the user can flip mode or re-target. Job is succeeded-with-
+        # skip — this is policy enforcement, not a failure.
+        if application_id is not None:
+            try:
+                async with sf() as s:
+                    await s.execute(
+                        update(Application)
+                        .where(Application.id == application_id)
+                        .values(
+                            status="needs_attention",
+                            error=str(exc)[:500],
+                        )
+                    )
+                    await s.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "failed to mark application %s needs_attention",
+                    application_id,
+                )
+        try:
+            async with sf() as s:
+                await s.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        status="succeeded",
+                        finished_at=datetime.now(timezone.utc),
+                        result={
+                            "application_id": application_id,
+                            "skipped": True,
+                            "reason": "needs_attention",
+                            "detail": str(exc)[:200],
+                        },
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="needs_attention",
+                message=str(exc)[:200],
+                data={"application_id": application_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "needs_attention handler failed for job %s", job_id
+            )
 
     except greenhouse_submit.CaptchaPauseRequired as exc:
         # Captcha handler already persisted the screenshot + notification +
