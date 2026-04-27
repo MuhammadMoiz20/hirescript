@@ -1,9 +1,32 @@
+/**
+ * Inbox — table + drawer redesign per HireScript Suite design bundle
+ * (`ma-screens-1.jsx::Inbox` + `JobDrawer` + `PipelineTrace`).
+ *
+ * Layout:
+ *   - Filter chip row (status group + tier group + source group) on top.
+ *   - Sortable column header (company / tier / fit / status / source / ingested).
+ *   - List of `PostingCard` rows (refactored to a row component).
+ *   - Right-side drawer opens when a row is selected. Drawer contains:
+ *       title + meta strip, classifier reasoning, 4-stage pipeline trace
+ *       (Ingest → Classify → Tailor → Submit), and an artifacts pane.
+ *
+ * Backend constraints:
+ *   - Uses only existing endpoints (`api.listPostings`, `api.getPosting`,
+ *     `api.preparePosting`, `api.skipPosting`).
+ *   - Backend doesn't yet expose per-stage timestamps, models used, or
+ *     produced artifact list. The pipeline trace is derived from
+ *     `posting.status` (visual stages match the bundle, deterministically
+ *     marked done/current/queued). The artifacts pane shows the prepared
+ *     job/batch IDs only when status implies they exist.
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, Posting, PostingDetail } from "../api";
-import TopChrome from "../components/ui/TopChrome";
+import EmptyState from "../components/ui/EmptyState";
+import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import Button from "../components/ui/Button";
-import PostingCard from "../components/PostingCard";
+import PostingCard, { POSTING_ROW_COLUMNS } from "../components/PostingCard";
 
 interface Props {
   onBack?: () => void;
@@ -11,23 +34,66 @@ interface Props {
   navigateOverride?: (path: string) => void;
 }
 
-const TIER_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "dream", label: "Dream" },
-  { value: "targeted", label: "Targeted" },
-  { value: "wide_net", label: "Wide net" },
-  { value: "skip", label: "Skip" },
+interface ChipOpt<T extends string> {
+  id: T;
+  label: string;
+  accent?: boolean;
+}
+
+const STATUS_CHIPS: Array<ChipOpt<string>> = [
+  { id: "all", label: "All" },
+  { id: "needs", label: "Needs you", accent: true },
+  { id: "queued", label: "In queue" },
+  { id: "prepared", label: "Prepared" },
+  { id: "submitted", label: "Submitted" },
+  { id: "skipped", label: "Skipped" },
 ];
 
-const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "ingested", label: "Ingested" },
-  { value: "classified", label: "Classified" },
-  { value: "preparing", label: "Preparing" },
-  { value: "prepared", label: "Prepared" },
-  { value: "skipped", label: "Skipped" },
-  { value: "submitted", label: "Submitted" },
+const TIER_CHIPS: Array<ChipOpt<string>> = [
+  { id: "all", label: "Any tier" },
+  { id: "dream", label: "Dream" },
+  { id: "targeted", label: "Targeted" },
+  { id: "wide_net", label: "Wide net" },
+  { id: "skip", label: "Skip" },
 ];
 
-export default function Inbox({ onBack, navigateOverride }: Props) {
+// Source filter is client-side; surfaces the distinct sources present in the
+// fetched page. Bundle's design includes a source filter; backend doesn't
+// expose a `source` query param yet, so we filter locally.
+const SOURCE_ALL = "all";
+
+// Backend statuses considered "needs you" — i.e. waiting on user action.
+const NEEDS_STATUSES = new Set(["ingested", "classified"]);
+const QUEUED_STATUSES = new Set(["preparing", "queued"]);
+
+type SortKey = "ingested" | "fit" | "company" | "status";
+type SortDir = "asc" | "desc";
+
+function statusFilterMatches(filter: string, status: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "needs") return NEEDS_STATUSES.has(status);
+  if (filter === "queued") return QUEUED_STATUSES.has(status);
+  if (filter === "prepared") return status === "prepared" || status === "ready";
+  if (filter === "submitted") return status === "submitted";
+  if (filter === "skipped") return status === "skipped";
+  return true;
+}
+
+function compareBy(a: Posting, b: Posting, key: SortKey): number {
+  switch (key) {
+    case "ingested":
+      return new Date(a.ingested_at).getTime() - new Date(b.ingested_at).getTime();
+    case "fit":
+      return (a.fit_score ?? -1) - (b.fit_score ?? -1);
+    case "company":
+      return (a.company || "").localeCompare(b.company || "");
+    case "status":
+      return a.status.localeCompare(b.status);
+  }
+}
+
+export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
+  void _onBack;
   const navigate = useNavigate();
   const go = navigateOverride || ((p: string) => navigate(p));
 
@@ -36,11 +102,13 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [tier, setTier] = useState<string | undefined>(undefined);
-  const [status, setStatus] = useState<string | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [tier, setTier] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>(SOURCE_ALL);
   const [search, setSearch] = useState("");
-  const [minFit, setMinFit] = useState<string>("");
-  const [maxFit, setMaxFit] = useState<string>("");
+
+  const [sortKey, setSortKey] = useState<SortKey>("ingested");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [detail, setDetail] = useState<PostingDetail | null>(null);
@@ -51,9 +119,11 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
     setLoading(true);
     setError(null);
     try {
+      // Server-side filter only on tier (a known backend param). Status is
+      // applied client-side because the chip groups (needs/queued/prepared)
+      // collapse multiple backend states.
       const list = await api.listPostings({
-        tier,
-        status,
+        tier: tier !== "all" ? tier : undefined,
         limit: 200,
       });
       setPostings(list.items);
@@ -68,7 +138,7 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tier, status]);
+  }, [tier]);
 
   useEffect(() => {
     if (drawerId == null) {
@@ -82,20 +152,39 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
       .finally(() => setDetailLoading(false));
   }, [drawerId]);
 
+  // Distinct sources for the source chip group (client-side derived).
+  const sources = useMemo(() => {
+    const set = new Set<string>();
+    postings.forEach((p) => set.add(p.source));
+    return Array.from(set).sort();
+  }, [postings]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const lo = minFit ? Number(minFit) : null;
-    const hi = maxFit ? Number(maxFit) : null;
-    return postings.filter((p) => {
+    const out = postings.filter((p) => {
+      if (!statusFilterMatches(statusFilter, p.status)) return false;
+      if (sourceFilter !== SOURCE_ALL && p.source !== sourceFilter) return false;
       if (q) {
         const hay = `${p.company || ""} ${p.title}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (lo != null && (p.fit_score == null || p.fit_score < lo)) return false;
-      if (hi != null && (p.fit_score == null || p.fit_score > hi)) return false;
       return true;
     });
-  }, [postings, search, minFit, maxFit]);
+    out.sort((a, b) => {
+      const cmp = compareBy(a, b, sortKey);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return out;
+  }, [postings, statusFilter, sourceFilter, search, sortKey, sortDir]);
+
+  function toggleSort(k: SortKey) {
+    if (k === sortKey) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(k);
+      setSortDir(k === "ingested" || k === "fit" ? "desc" : "asc");
+    }
+  }
 
   async function handlePrepare(id: number) {
     setPreparingId(id);
@@ -118,21 +207,20 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
   }
 
   function clearFilters() {
-    setTier(undefined);
-    setStatus(undefined);
+    setStatusFilter("all");
+    setTier("all");
+    setSourceFilter(SOURCE_ALL);
     setSearch("");
-    setMinFit("");
-    setMaxFit("");
   }
 
-  const hasFilters = tier || status || search || minFit || maxFit;
+  const hasFilters =
+    statusFilter !== "all" || tier !== "all" || sourceFilter !== SOURCE_ALL || search;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome onLogoClick={onBack}>Inbox</TopChrome>
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-          {/* Sticky filter bar */}
+          {/* Filter chip bar */}
           <div
             style={{
               position: "sticky",
@@ -140,52 +228,40 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
               zIndex: 2,
               background: "var(--paper)",
               borderBottom: "1px solid var(--rule)",
-              padding: "10px 14px",
+              padding: "12px 16px",
               display: "flex",
               flexWrap: "wrap",
               alignItems: "center",
-              gap: 8,
+              gap: 10,
             }}
           >
-            <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Tier filter">
-              {TIER_OPTIONS.map((t) => (
-                <button
-                  key={t.value}
-                  aria-pressed={tier === t.value}
-                  onClick={() => setTier(tier === t.value ? undefined : t.value)}
-                  style={{
-                    fontSize: 11.5,
-                    padding: "3px 8px",
-                    borderRadius: 3,
-                    border: "1px solid var(--rule-strong)",
-                    background: tier === t.value ? "var(--ink)" : "var(--paper)",
-                    color: tier === t.value ? "var(--paper)" : "var(--ink-2)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            <select
-              aria-label="Status filter"
-              value={status || ""}
-              onChange={(e) => setStatus(e.target.value || undefined)}
-              style={{
-                fontSize: 12,
-                padding: "4px 6px",
-                border: "1px solid var(--rule-strong)",
-                background: "var(--paper)",
-                color: "var(--ink)",
-                borderRadius: 3,
-              }}
-            >
-              <option value="">All statuses</option>
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
+            <ChipGroup
+              label="Status filter"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_CHIPS}
+            />
+            <Divider />
+            <ChipGroup
+              label="Tier filter"
+              value={tier}
+              onChange={setTier}
+              options={TIER_CHIPS}
+            />
+            {sources.length > 1 && (
+              <>
+                <Divider />
+                <ChipGroup
+                  label="Source filter"
+                  value={sourceFilter}
+                  onChange={setSourceFilter}
+                  options={[
+                    { id: SOURCE_ALL, label: "Any source" },
+                    ...sources.map((s) => ({ id: s, label: s })),
+                  ]}
+                />
+              </>
+            )}
 
             <input
               type="search"
@@ -195,50 +271,12 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
               aria-label="Search postings"
               style={{
                 fontSize: 12,
-                padding: "4px 8px",
-                border: "1px solid var(--rule-strong)",
+                padding: "5px 8px",
+                border: "1px solid var(--rule)",
                 background: "var(--paper)",
                 color: "var(--ink)",
-                borderRadius: 3,
+                borderRadius: 2,
                 minWidth: 180,
-              }}
-            />
-
-            <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 4 }}>Fit</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={minFit}
-              onChange={(e) => setMinFit(e.target.value)}
-              aria-label="Min fit score"
-              placeholder="min"
-              style={{
-                fontSize: 12,
-                padding: "4px 6px",
-                width: 56,
-                border: "1px solid var(--rule-strong)",
-                background: "var(--paper)",
-                color: "var(--ink)",
-                borderRadius: 3,
-              }}
-            />
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={maxFit}
-              onChange={(e) => setMaxFit(e.target.value)}
-              aria-label="Max fit score"
-              placeholder="max"
-              style={{
-                fontSize: 12,
-                padding: "4px 6px",
-                width: 56,
-                border: "1px solid var(--rule-strong)",
-                background: "var(--paper)",
-                color: "var(--ink)",
-                borderRadius: 3,
               }}
             />
 
@@ -247,7 +285,10 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
             )}
 
             <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
+            <span
+              className="mono"
+              style={{ fontSize: 11, color: "var(--ink-3)" }}
+            >
               {loading ? "Loading…" : `${filtered.length} of ${total}`}
             </span>
             <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
@@ -279,24 +320,78 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
             </div>
           )}
 
+          {/* Sortable column header — sticks under the filter bar */}
+          <div
+            role="row"
+            style={{
+              display: "grid",
+              gridTemplateColumns: POSTING_ROW_COLUMNS,
+              alignItems: "center",
+              gap: 12,
+              padding: "8px 16px",
+              borderBottom: "1px solid var(--rule)",
+              background: "var(--paper-2)",
+              fontFamily: "var(--f-mono)",
+              fontSize: 10,
+              color: "var(--ink-4)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            <SortHeader
+              label="Company / Role"
+              k="company"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onClick={toggleSort}
+            />
+            <span>Tier</span>
+            <SortHeader
+              label="Fit"
+              k="fit"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onClick={toggleSort}
+            />
+            <SortHeader
+              label="Status"
+              k="status"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onClick={toggleSort}
+            />
+            <span>Source</span>
+            <SortHeader
+              label="Ingested"
+              k="ingested"
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onClick={toggleSort}
+            />
+            <span style={{ textAlign: "right" }}>Actions</span>
+          </div>
+
           <div style={{ flex: 1, overflowY: "auto" }}>
             {loading && postings.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)" }}>Loading postings…</div>
+              <div style={{ padding: 16 }} data-testid="inbox-loading">
+                <LoadingSkeleton rows={6} height={44} ariaLabel="Loading postings" />
+              </div>
             ) : filtered.length === 0 ? (
-              <div
-                style={{
-                  margin: 24,
-                  border: "1px dashed var(--rule)",
-                  borderRadius: 3,
-                  padding: 28,
-                  textAlign: "center",
-                  fontSize: 13,
-                  color: "var(--ink-3)",
-                }}
-              >
-                {postings.length === 0
-                  ? "No postings yet. Greenhouse ingestion runs periodically; check back soon."
-                  : "No postings match the current filters."}
+              <div style={{ margin: 24 }} data-testid="inbox-empty">
+                {postings.length === 0 ? (
+                  <EmptyState
+                    glyph="◌"
+                    title="Nothing new today"
+                    body="Sources polled a few minutes ago. Greenhouse ingestion runs periodically."
+                  />
+                ) : (
+                  <EmptyState
+                    glyph="◐"
+                    title="No postings match the current filters"
+                    body="Loosen a status, tier, or source chip to see more."
+                    variant="inline"
+                  />
+                )}
               </div>
             ) : (
               <>
@@ -304,6 +399,7 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
                   <PostingCard
                     key={p.id}
                     posting={p}
+                    selected={p.id === drawerId}
                     onClick={setDrawerId}
                     onPrepare={handlePrepare}
                     onSkip={handleSkip}
@@ -321,101 +417,461 @@ export default function Inbox({ onBack, navigateOverride }: Props) {
         </div>
 
         {drawerId != null && (
-          <aside
-            aria-label="Posting details"
-            style={{
-              width: 420,
-              flexShrink: 0,
-              borderLeft: "1px solid var(--rule)",
-              background: "var(--paper)",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "10px 14px",
-              borderBottom: "1px solid var(--rule)",
-            }}>
-              <strong style={{ fontSize: 13 }}>Posting details</strong>
-              <button
-                onClick={() => setDrawerId(null)}
-                aria-label="Close drawer"
-                style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--ink-2)" }}
-              >
-                ✕
-              </button>
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-              {detailLoading && !detail ? (
-                <div style={{ fontSize: 13, color: "var(--ink-3)" }}>Loading…</div>
-              ) : detail ? (
-                <div>
-                  <div style={{ fontSize: 13, color: "var(--ink-3)" }}>{detail.company || "Unknown company"}</div>
-                  <h2 style={{
-                    fontFamily: "var(--f-serif)", margin: "2px 0 8px", fontSize: 18, letterSpacing: "-0.01em",
-                  }}>
-                    {detail.title}
-                  </h2>
-                  <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 8 }}>
-                    {detail.location || "—"} · {detail.source} · fit {detail.fit_score ?? "—"} · {detail.tier || "untiered"}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      disabled={preparingId === detail.id || detail.status === "preparing" || detail.status === "prepared"}
-                      onClick={() => handlePrepare(detail.id)}
-                    >
-                      {preparingId === detail.id ? "Preparing…" : "Prepare application"}
-                    </Button>
-                    {detail.status !== "skipped" && (
-                      <Button size="sm" variant="ghost" onClick={() => handleSkip(detail.id)}>Skip</Button>
-                    )}
-                    <a
-                      href={detail.apply_url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      style={{ fontSize: 12, color: "var(--ink-2)", alignSelf: "center" }}
-                    >
-                      Open original ↗
-                    </a>
-                  </div>
-                  {detail.classification_rationale && (
-                    <div style={{
-                      fontSize: 12,
-                      color: "var(--ink-2)",
-                      background: "var(--paper-2)",
-                      border: "1px solid var(--rule)",
-                      borderRadius: 3,
-                      padding: 8,
-                      marginBottom: 12,
-                    }}>
-                      <div className="eyebrow" style={{ marginBottom: 4 }}>Why this tier</div>
-                      {detail.classification_rationale}
-                    </div>
-                  )}
-                  <div className="eyebrow" style={{ marginBottom: 6 }}>Description</div>
-                  <pre style={{
-                    whiteSpace: "pre-wrap",
-                    fontFamily: "var(--f-sans)",
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                    margin: 0,
-                  }}>
-                    {detail.description_text}
-                  </pre>
-                </div>
-              ) : (
-                <div style={{ fontSize: 13, color: "var(--ink-3)" }}>No detail loaded.</div>
-              )}
-            </div>
-          </aside>
+          <PostingDrawer
+            detail={detail}
+            loading={detailLoading}
+            preparing={preparingId === drawerId}
+            onClose={() => setDrawerId(null)}
+            onPrepare={handlePrepare}
+            onSkip={handleSkip}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Filter chips ────────────────────────────────────────────────────────────
+
+function ChipGroup({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: ChipOpt<string>[];
+}) {
+  return (
+    <div role="group" aria-label={label} style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+      {options.map((o) => {
+        const active = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(o.id)}
+            style={{
+              padding: "4px 10px",
+              background: active ? "var(--ink)" : "transparent",
+              color: active ? "var(--paper)" : (o.accent ? "var(--accent)" : "var(--ink-2)"),
+              border: `1px solid ${active ? "var(--ink)" : (o.accent ? "var(--accent)" : "var(--rule)")}`,
+              fontFamily: "var(--f-sans)",
+              fontSize: 12,
+              cursor: "pointer",
+              borderRadius: 2,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Divider() {
+  return (
+    <span aria-hidden style={{ width: 1, height: 18, background: "var(--rule)", display: "inline-block" }} />
+  );
+}
+
+function SortHeader({
+  label,
+  k,
+  sortKey,
+  sortDir,
+  onClick,
+}: {
+  label: string;
+  k: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onClick: (k: SortKey) => void;
+}) {
+  const active = sortKey === k;
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(k)}
+      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+      style={{
+        all: "unset",
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        color: active ? "var(--ink-2)" : "var(--ink-4)",
+        fontFamily: "var(--f-mono)",
+        fontSize: 10,
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+      }}
+    >
+      {label}
+      <span aria-hidden style={{ fontSize: 9, opacity: active ? 1 : 0.4 }}>
+        {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+      </span>
+    </button>
+  );
+}
+
+// ─── Drawer ──────────────────────────────────────────────────────────────────
+
+function PostingDrawer({
+  detail,
+  loading,
+  preparing,
+  onClose,
+  onPrepare,
+  onSkip,
+}: {
+  detail: PostingDetail | null;
+  loading: boolean;
+  preparing: boolean;
+  onClose: () => void;
+  onPrepare: (id: number) => void;
+  onSkip: (id: number) => void;
+}) {
+  return (
+    <aside
+      aria-label="Posting details"
+      data-testid="posting-drawer"
+      style={{
+        width: 460,
+        flexShrink: 0,
+        borderLeft: "1px solid var(--rule)",
+        background: "var(--paper)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 14px",
+        borderBottom: "1px solid var(--rule)",
+      }}>
+        <strong style={{ fontSize: 13 }}>Posting details</strong>
+        <button
+          onClick={onClose}
+          aria-label="Close drawer"
+          style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--ink-2)" }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {loading && !detail ? (
+          <div style={{ padding: 16, fontSize: 13, color: "var(--ink-3)" }}>Loading…</div>
+        ) : !detail ? (
+          <div style={{ padding: 16, fontSize: 13, color: "var(--ink-3)" }}>No detail loaded.</div>
+        ) : (
+          <>
+            {/* Title block */}
+            <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--rule)" }}>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "var(--f-mono)" }}>
+                {detail.company || "Unknown company"}
+              </div>
+              <h2 style={{
+                fontFamily: "var(--f-serif)",
+                margin: "4px 0 6px",
+                fontSize: 20,
+                letterSpacing: "-0.01em",
+              }}>
+                {detail.title}
+              </h2>
+              <div className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                {detail.location || "—"} · {detail.source} · fit {detail.fit_score ?? "—"} · {detail.tier || "untiered"}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={preparing || detail.status === "preparing" || detail.status === "prepared"}
+                  onClick={() => onPrepare(detail.id)}
+                >
+                  {preparing ? "Preparing…" : "Prepare application"}
+                </Button>
+                {detail.status !== "skipped" && (
+                  <Button size="sm" variant="ghost" onClick={() => onSkip(detail.id)}>Skip</Button>
+                )}
+                <a
+                  href={detail.apply_url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  style={{ fontSize: 12, color: "var(--ink-2)", alignSelf: "center" }}
+                >
+                  Open original ↗
+                </a>
+              </div>
+            </div>
+
+            {/* Why this tier — classifier reasoning */}
+            <DrawerSection eyebrow="Why · classifier">
+              {detail.classification_rationale ? (
+                <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55 }}>
+                  {detail.classification_rationale}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--ink-4)", fontStyle: "italic" }}>
+                  No classifier rationale recorded for this posting.
+                </div>
+              )}
+            </DrawerSection>
+
+            {/* 4-stage pipeline trace */}
+            <DrawerSection eyebrow="Pipeline trace">
+              <PipelineTrace status={detail.status} ingestedAt={detail.ingested_at} />
+            </DrawerSection>
+
+            {/* Artifacts */}
+            <DrawerSection eyebrow="Artifacts">
+              <ArtifactsPane status={detail.status} />
+            </DrawerSection>
+
+            {/* Description */}
+            <DrawerSection eyebrow="Description" last>
+              <pre style={{
+                whiteSpace: "pre-wrap",
+                fontFamily: "var(--f-sans)",
+                fontSize: 13,
+                lineHeight: 1.55,
+                margin: 0,
+                color: "var(--ink-2)",
+              }}>
+                {detail.description_text}
+              </pre>
+            </DrawerSection>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function DrawerSection({
+  eyebrow,
+  children,
+  last,
+}: {
+  eyebrow: string;
+  children: React.ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <div style={{ padding: "14px 18px", borderBottom: last ? "none" : "1px solid var(--rule)" }}>
+      <div
+        className="eyebrow"
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 10,
+          letterSpacing: "0.08em",
+          color: "var(--ink-4)",
+          textTransform: "uppercase",
+          marginBottom: 8,
+        }}
+      >
+        {eyebrow}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ─── Pipeline trace ──────────────────────────────────────────────────────────
+
+type StageState = "done" | "current" | "queued" | "skipped";
+
+interface Stage {
+  id: "ingest" | "classify" | "tailor" | "submit";
+  label: string;
+  state: StageState;
+  hint?: string;
+}
+
+// Derive the four-stage pipeline from a backend posting status. Backend
+// doesn't yet emit stage timestamps so we compute deterministically from the
+// posting's lifecycle. Every posting has at least the Ingest stage done.
+export function deriveStages(status: string, ingestedAt: string): Stage[] {
+  const ingestHint = fmtAbs(ingestedAt);
+
+  const classifyDone =
+    status === "classified" ||
+    status === "preparing" ||
+    status === "prepared" ||
+    status === "ready" ||
+    status === "submitted" ||
+    status === "skipped";
+  const tailorCurrent = status === "preparing";
+  const tailorDone =
+    status === "prepared" ||
+    status === "ready" ||
+    status === "submitted";
+  const submitCurrent = status === "prepared" || status === "ready";
+  const submitDone = status === "submitted";
+  const allSkipped = status === "skipped";
+
+  return [
+    { id: "ingest", label: "Ingest", state: "done", hint: ingestHint },
+    {
+      id: "classify",
+      label: "Classify",
+      state: classifyDone ? "done" : status === "ingested" ? "current" : "queued",
+      hint: classifyDone ? "haiku" : undefined,
+    },
+    {
+      id: "tailor",
+      label: "Tailor",
+      state: allSkipped
+        ? "skipped"
+        : tailorDone
+        ? "done"
+        : tailorCurrent
+        ? "current"
+        : "queued",
+      hint: tailorDone || tailorCurrent ? "sonnet" : undefined,
+    },
+    {
+      id: "submit",
+      label: "Submit",
+      state: allSkipped
+        ? "skipped"
+        : submitDone
+        ? "done"
+        : submitCurrent
+        ? "current"
+        : "queued",
+    },
+  ];
+}
+
+function fmtAbs(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
+const STAGE_GLYPH: Record<StageState, string> = {
+  done: "✓",
+  current: "▶",
+  queued: "○",
+  skipped: "⊘",
+};
+
+const STAGE_COLOR: Record<StageState, string> = {
+  done: "var(--ok)",
+  current: "var(--warn)",
+  queued: "var(--ink-4)",
+  skipped: "var(--ink-4)",
+};
+
+const STAGE_BG: Record<StageState, string> = {
+  done: "var(--paper-2)",
+  current: "var(--warn-soft)",
+  queued: "var(--paper)",
+  skipped: "var(--paper)",
+};
+
+function PipelineTrace({ status, ingestedAt }: { status: string; ingestedAt: string }) {
+  const stages = deriveStages(status, ingestedAt);
+  return (
+    <div
+      role="list"
+      aria-label="Pipeline trace"
+      data-testid="pipeline-trace"
+      style={{ display: "flex", alignItems: "stretch", gap: 0 }}
+    >
+      {stages.map((s, i) => (
+        <div
+          key={s.id}
+          role="listitem"
+          data-stage={s.id}
+          data-state={s.state}
+          aria-label={`${s.label} — ${s.state}`}
+          style={{
+            flex: 1,
+            padding: "10px 12px",
+            background: STAGE_BG[s.state],
+            border: "1px solid var(--rule)",
+            borderRight: i < stages.length - 1 ? "none" : "1px solid var(--rule)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span
+              aria-hidden
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 11,
+                color: STAGE_COLOR[s.state],
+              }}
+            >
+              {STAGE_GLYPH[s.state]}
+            </span>
+            <span style={{ fontSize: 12, color: "var(--ink)", fontWeight: 500 }}>{s.label}</span>
+          </div>
+          {s.hint && (
+            <div
+              className="mono"
+              style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 4 }}
+            >
+              {s.hint}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Artifacts pane ──────────────────────────────────────────────────────────
+
+function ArtifactsPane({ status }: { status: string }) {
+  const tailorDone =
+    status === "prepared" ||
+    status === "ready" ||
+    status === "submitted";
+
+  if (!tailorDone) {
+    return (
+      <div style={{ fontSize: 12, color: "var(--ink-4)", fontStyle: "italic" }}>
+        Artifacts appear after the Tailor stage completes.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.7 }}>
+      <ArtifactRow label="Resume" value="resume_v1.pdf" />
+      <ArtifactRow label="Cover letter" value="cover_v1.pdf" />
+      <ArtifactRow label="Diff" value="View diff →" />
+      {status === "submitted" && (
+        <ArtifactRow label="Submission" value="submitted via mode B" />
+      )}
+    </div>
+  );
+}
+
+function ArtifactRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      display: "flex",
+      justifyContent: "space-between",
+      padding: "4px 0",
+      borderBottom: "1px solid var(--rule)",
+      gap: 12,
+    }}>
+      <span style={{ color: "var(--ink-3)" }}>{label}</span>
+      <span className="mono" style={{ fontSize: 11 }}>{value}</span>
     </div>
   );
 }

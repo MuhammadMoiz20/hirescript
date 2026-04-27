@@ -45,6 +45,12 @@ interface Props {
    * Optional — when omitted, the backend falls back to the DB value.
    */
   getCurrentLatex?: () => string;
+  /**
+   * Optional collapse handler. When provided the rail header surfaces a
+   * `panel-r` close affordance (bundle: `screens-a.jsx::ChatRail`). Mobile
+   * drawer callers leave this undefined and rely on the drawer chrome.
+   */
+  onClose?: () => void;
 }
 
 const TIER_TO_MODEL: Record<Tier, ModelName> = {
@@ -58,6 +64,7 @@ export default function ChatSidebar({
   onProposed,
   defaultTier = "haiku",
   getCurrentLatex,
+  onClose,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -223,6 +230,25 @@ export default function ChatSidebar({
           <option value="sonnet">Sonnet</option>
           <option value="opus">Opus</option>
         </select>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close chat"
+            title="Collapse chat"
+            style={{
+              color: "var(--ink-3)",
+              padding: 4,
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            <Glyph name="panel-r" size={13} />
+          </button>
+        )}
       </div>
 
       <div
@@ -374,10 +400,32 @@ export default function ChatSidebar({
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: 6,
               padding: "4px 4px 2px",
+              flexWrap: "wrap",
             }}
           >
+            {(["Tighten to 1 page", "Tailor to JD"] as const).map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setInput(preset)}
+                disabled={streaming}
+                className="mono"
+                style={{
+                  fontSize: 11,
+                  color: "var(--ink-2)",
+                  padding: "2px 7px",
+                  border: "1px solid var(--rule)",
+                  borderRadius: 2,
+                  background: "var(--paper-2)",
+                  cursor: streaming ? "not-allowed" : "pointer",
+                  opacity: streaming ? 0.5 : 1,
+                }}
+              >
+                {preset}
+              </button>
+            ))}
             <span style={{ flex: 1 }} />
             <Button
               size="sm"

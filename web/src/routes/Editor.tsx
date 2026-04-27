@@ -9,11 +9,13 @@ import DiffView from "../components/DiffView";
 import SectionFormEditor from "../components/SectionFormEditor";
 import VersionHistory from "../components/VersionHistory";
 import OverflowBanner from "../components/OverflowBanner";
-import TopChrome from "../components/ui/TopChrome";
 import EditorLeftRail, { EditorView } from "../components/editor/EditorLeftRail";
 import EditorToolbar from "../components/editor/EditorToolbar";
 import ChatDrawer from "../components/editor/ChatDrawer";
 import MobileTabBar, { MobileTab } from "../components/editor/MobileTabBar";
+import Glyph from "../components/ui/Glyph";
+import PageCountBadge from "../components/ui/PageCountBadge";
+import Button from "../components/ui/Button";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "../components/ThemeProvider";
 import { useBreakpoint } from "../hooks/useBreakpoint";
@@ -41,6 +43,11 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const bp = useBreakpoint();
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("edit");
+  // Desktop chat rail is open by default to mirror the bundle's editor; user
+  // can collapse it to a 36px vertical strip to claim the width back for the
+  // PDF preview.
+  const [desktopChatOpen, setDesktopChatOpen] = useState(true);
+  const [compiledAt, setCompiledAt] = useState<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -60,6 +67,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
         setPdf(blob);
         setPageCount(pc);
         setOverflowCount(oc);
+        setCompiledAt(Date.now());
       } catch (e: any) {
         const detail = e?.detail ?? e;
         setError(detail?.log || detail?.message || String(e));
@@ -114,6 +122,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
       setPdf(blob);
       setPageCount(pc);
       setOverflowCount(oc);
+      setCompiledAt(Date.now());
     } catch (e: any) {
       // save() already surfaced the error; only set if not already set.
       if (!error) setError(e?.detail?.log || String(e));
@@ -289,11 +298,6 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   if (bp === "mobile") {
     return (
       <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-        <TopChrome onLogoClick={onBack}>
-          <span>Library</span>
-          <span style={{ color: "var(--rule-strong)" }}>/</span>
-          <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
-        </TopChrome>
         <EditorToolbar
           resumeName={resumeName}
           onBack={onBack}
@@ -388,21 +392,16 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "var(--paper)" }}>
-      <TopChrome onLogoClick={onBack}>
-        <span>Library</span>
-        <span style={{ color: "var(--rule-strong)" }}>/</span>
-        <strong style={{ color: "var(--ink)", fontWeight: 600 }}>{resumeName || "—"}</strong>
-      </TopChrome>
-
+      <OverflowBanner pageCount={pageCount} overflowCount={overflowCount} onTighten={tighten} busy={tightening} />
       <div
         style={{
           flex: 1,
           display: "grid",
-          // Slightly bias the preview wider than the editor so a US-letter page
-          // fits at ~100% zoom without scrolling, and trim the chat rail so the
-          // editor still has breathing room on 13-14" screens.
+          // Bundle (`screens-a.jsx::EditorScreen`) layout: left rail + form
+          // editor + PDF hero + 360px chat rail. The chat rail collapses to a
+          // 36px vertical strip when the user wants more PDF width.
           gridTemplateColumns: isDesktop
-            ? "48px minmax(360px, 0.9fr) minmax(560px, 1.15fr) 320px"
+            ? `48px minmax(360px, 1fr) minmax(440px, 1.1fr) ${desktopChatOpen ? "360px" : "36px"}`
             : "48px minmax(320px, 0.95fr) minmax(440px, 1.05fr)",
           gridTemplateRows: "minmax(0, 1fr)",
           minHeight: 0,
@@ -410,7 +409,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
       >
         <EditorLeftRail view={view} onChange={switchTo} disabled={sectionsLoading} />
 
-        {/* Center: toolbar + overflow + active panel */}
+        {/* Center: toolbar + active editor panel */}
         <div
           style={{
             display: "flex",
@@ -432,36 +431,136 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
             pageCount={pageCount}
             onOpenChat={!isDesktop ? () => setChatOpen(true) : undefined}
           />
-          <OverflowBanner pageCount={pageCount} overflowCount={overflowCount} onTighten={tighten} busy={tightening} />
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             {centerView}
           </div>
         </div>
 
-        {/* Preview / Diff */}
+        {/* PDF preview hero — bundle's 420-ish column with chip header */}
         <div
           style={{
-            overflow: "auto",
-            padding: 16,
-            borderRight: "1px solid var(--rule)",
+            display: "flex",
+            flexDirection: "column",
             background: "var(--paper-2)",
+            borderRight: isDesktop && desktopChatOpen ? "1px solid var(--rule)" : "1px solid var(--rule)",
             minWidth: 0,
+            minHeight: 0,
           }}
         >
-          {previewPane}
+          <div
+            style={{
+              padding: "8px 12px",
+              borderBottom: "1px solid var(--rule)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background: "var(--paper)",
+              flexShrink: 0,
+            }}
+          >
+            <PageCountBadge state={compiling ? "compiling" : pageCount} size="sm" />
+            <span
+              className="mono"
+              style={{ fontSize: 11, color: "var(--ink-3)" }}
+              data-testid="pdf-meta"
+            >
+              {compiling
+                ? "compiling…"
+                : compiledAt
+                  ? "compiled just now"
+                  : "not yet compiled"}
+            </span>
+            <span style={{ flex: 1 }} />
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="download"
+              onClick={download}
+              disabled={downloading || !pdf}
+              aria-label="Download PDF"
+              title="Download PDF"
+            >
+              PDF
+            </Button>
+            <Button
+              size="sm"
+              variant={pageCount === 1 ? "primary" : "default"}
+              disabled={pageCount !== 1 || saving}
+              onClick={save}
+              title={
+                pageCount === 1
+                  ? "Save as final"
+                  : `Can't save as final — ${pageCount} pages`
+              }
+            >
+              Save as final
+            </Button>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: 16,
+              minWidth: 0,
+              minHeight: 0,
+            }}
+          >
+            {previewPane}
+          </div>
         </div>
 
-        {/* Chat rail (desktop only) */}
-        {isDesktop && (
-          <div style={{ minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {/* Chat rail (desktop only) — collapsible */}
+        {isDesktop && desktopChatOpen && (
+          <div
+            style={{
+              minWidth: 0,
+              minHeight: 0,
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--paper)",
+            }}
+          >
             <ChatSidebar
               resumeId={id}
               getCurrentLatex={() => latex}
               onProposed={(result) => {
                 if (result.proposed_latex) setProposed(result);
               }}
+              onClose={() => setDesktopChatOpen(false)}
             />
           </div>
+        )}
+        {isDesktop && !desktopChatOpen && (
+          <button
+            type="button"
+            onClick={() => setDesktopChatOpen(true)}
+            title="Open Claude"
+            aria-label="Open chat"
+            style={{
+              borderLeft: "1px solid var(--rule)",
+              background: "var(--paper)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: "14px 0",
+              gap: 8,
+              color: "var(--ink-2)",
+              cursor: "pointer",
+            }}
+          >
+            <Glyph name="chat" size={14} />
+            <span
+              className="mono"
+              style={{
+                writingMode: "vertical-rl",
+                transform: "rotate(180deg)",
+                fontSize: 11,
+              }}
+            >
+              Claude
+            </span>
+          </button>
         )}
       </div>
 

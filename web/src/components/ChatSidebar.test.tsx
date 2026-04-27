@@ -18,6 +18,13 @@ vi.mock("../api", () => {
   return { api: { streamEdit }, streamEdit };
 });
 
+test("renders bundle empty-state copy when no messages yet", () => {
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  // Bundle voice: matter-of-fact, action-oriented prompt for the chat rail.
+  expect(screen.getByText(/Ask Claude/i)).toBeInTheDocument();
+  expect(screen.getByText(/reviewable diff/i)).toBeInTheDocument();
+});
+
 test("renders streamed tokens and calls onProposed when result arrives", async () => {
   const onProposed = vi.fn();
   render(<ChatSidebar resumeId={1} onProposed={onProposed} />);
@@ -69,6 +76,28 @@ test("sends history and currentLatex on follow-up turns", async () => {
   expect(opts.currentLatex).toBe("\\documentclass{article}");
   expect(opts.history.length).toBeGreaterThanOrEqual(2);
   expect(opts.history[0]).toEqual({ role: "user", content: "first turn" });
+});
+
+test("renders close affordance only when onClose is provided", () => {
+  const { rerender } = render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  expect(screen.queryByRole("button", { name: /close chat/i })).toBeNull();
+  rerender(<ChatSidebar resumeId={1} onProposed={() => {}} onClose={() => {}} />);
+  expect(screen.getByRole("button", { name: /close chat/i })).toBeInTheDocument();
+});
+
+test("preset chip prefills the input", () => {
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+  expect(textarea.value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: /tighten to 1 page/i }));
+  expect(textarea.value).toBe("Tighten to 1 page");
+});
+
+test("onClose fires when collapse button clicked", () => {
+  const onClose = vi.fn();
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} onClose={onClose} />);
+  fireEvent.click(screen.getByRole("button", { name: /close chat/i }));
+  expect(onClose).toHaveBeenCalled();
 });
 
 test("shows error when onError fires", async () => {

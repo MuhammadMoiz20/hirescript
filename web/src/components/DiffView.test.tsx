@@ -12,15 +12,22 @@ const defaultProps = {
   onReject: () => {},
 };
 
+test("renders empty-state copy when proposed equals current", () => {
+  const same = "\\documentclass{article}\\begin{document}hi\\end{document}\n";
+  render(<DiffView {...defaultProps} currentLatex={same} proposedLatex={same} />);
+  expect(screen.getByTestId("diff-empty")).toBeInTheDocument();
+  expect(screen.getByText(/no changes to review/i)).toBeInTheDocument();
+});
+
 test("shows green 1-page badge when enforced", () => {
   render(<DiffView {...defaultProps} />);
-  expect(screen.getByText(/1 page/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/1 page/i).length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: /accept/i })).not.toBeDisabled();
 });
 
 test("disables accept when not enforced", () => {
   render(<DiffView {...defaultProps} pageCount={2} enforced={false} />);
-  expect(screen.getByText(/2 page/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/2 page/i).length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: /accept/i })).toBeDisabled();
 });
 
@@ -45,8 +52,80 @@ test("renders removed-terms callout when present", () => {
   expect(screen.getByText("shipped")).toBeInTheDocument();
 });
 
+test("renders preserved protected terms in the strip", () => {
+  render(
+    <DiffView
+      {...defaultProps}
+      preservedTerms={["idempotent", "SOC2"]}
+    />,
+  );
+  const strip = screen.getByTestId("protected-term-strip");
+  expect(strip).toHaveTextContent("idempotent");
+  expect(strip).toHaveTextContent("SOC2");
+});
+
+test("renders 'none pinned' when no protected terms supplied", () => {
+  render(<DiffView {...defaultProps} />);
+  expect(screen.getByTestId("protected-term-strip")).toHaveTextContent(/none pinned/i);
+});
+
 test("renders some indication of changes", () => {
   render(<DiffView {...defaultProps} currentLatex="alpha\n" proposedLatex="beta\n" />);
   expect(screen.getByText(/alpha/)).toBeInTheDocument();
   expect(screen.getByText(/beta/)).toBeInTheDocument();
+});
+
+test("renders numbered hotspots in the gutter for changed regions", () => {
+  render(
+    <DiffView
+      {...defaultProps}
+      currentLatex={"a\nb\nc\n"}
+      proposedLatex={"a\nB\nc\n"}
+    />,
+  );
+  const hotspot = document.querySelector("[data-hotspot-id]");
+  expect(hotspot).not.toBeNull();
+  expect(hotspot?.getAttribute("data-hotspot-id")).toBe("1");
+});
+
+test("clicking a hotspot fires onHotspotClick with its id", () => {
+  const onHotspotClick = vi.fn();
+  render(
+    <DiffView
+      {...defaultProps}
+      currentLatex={"a\nb\nc\n"}
+      proposedLatex={"a\nB\nc\n"}
+      onHotspotClick={onHotspotClick}
+    />,
+  );
+  const hotspot = screen.getByRole("button", { name: /jump to pdf region 1/i });
+  fireEvent.click(hotspot);
+  expect(onHotspotClick).toHaveBeenCalledWith(1);
+});
+
+test("renders compile metadata when model + iterations supplied", () => {
+  render(
+    <DiffView
+      {...defaultProps}
+      model="sonnet"
+      iterations={2}
+      tokensCached={1200}
+      tokensFresh={340}
+      wallMs={4200}
+    />,
+  );
+  expect(screen.getByText(/Sonnet 4\.6/)).toBeInTheDocument();
+  expect(screen.getByText(/iter 2/)).toBeInTheDocument();
+  expect(screen.getByText(/4\.2s/)).toBeInTheDocument();
+});
+
+test("shows diff size summary in header", () => {
+  render(
+    <DiffView
+      {...defaultProps}
+      currentLatex={"a\nb\n"}
+      proposedLatex={"a\nB\n"}
+    />,
+  );
+  expect(screen.getByTestId("diff-size")).toHaveTextContent(/2 lines changed/i);
 });
