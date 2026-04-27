@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, Posting, PostingDetail } from "../api";
+import { api, Posting, PostingDetail, SourceInfo } from "../api";
 import EmptyState from "../components/ui/EmptyState";
 import LoadingSkeleton from "../components/ui/LoadingSkeleton";
 import Button from "../components/ui/Button";
@@ -62,12 +62,28 @@ const TIER_CHIPS: Array<ChipOpt<string>> = [
 // cover the five ingest sources the backend produces.
 const SOURCE_ALL = "all";
 
+// Static label map; dynamic tos_risk comes from `GET /sources` so the
+// badge always reflects the backend registry.
+const SOURCE_LABELS: Record<string, string> = {
+  greenhouse: "Greenhouse",
+  lever: "Lever",
+  ashby: "Ashby",
+  workable: "Workable",
+  linkedin: "LinkedIn",
+  indeed: "Indeed",
+  wellfound: "Wellfound",
+  gmail_digest: "Gmail digest",
+};
+
 const SOURCE_CHIPS: Array<ChipOpt<string>> = [
   { id: SOURCE_ALL, label: "All" },
   { id: "greenhouse", label: "Greenhouse" },
   { id: "lever", label: "Lever" },
   { id: "ashby", label: "Ashby" },
   { id: "workable", label: "Workable" },
+  { id: "linkedin", label: "LinkedIn" },
+  { id: "indeed", label: "Indeed" },
+  { id: "wellfound", label: "Wellfound" },
   { id: "gmail_digest", label: "Gmail digest" },
 ];
 
@@ -124,6 +140,21 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [preparingId, setPreparingId] = useState<number | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
+  // Source registry — used for tos_risk badge on chips.
+  const [sourceInfo, setSourceInfo] = useState<Record<string, SourceInfo["tos_risk"]>>({});
+
+  useEffect(() => {
+    api
+      .listSources()
+      .then((rows) => {
+        const m: Record<string, SourceInfo["tos_risk"]> = {};
+        for (const r of rows) m[r.name] = r.tos_risk;
+        setSourceInfo(m);
+      })
+      .catch(() => {
+        // Non-fatal; the chip group still works without the badge.
+      });
+  }, []);
 
   async function refresh() {
     setLoading(true);
@@ -257,6 +288,7 @@ export default function Inbox({ onBack: _onBack, navigateOverride }: Props) {
               value={sourceFilter}
               onChange={setSourceFilter}
               options={SOURCE_CHIPS}
+              risks={sourceInfo}
             />
 
             <input
@@ -455,16 +487,19 @@ function ChipGroup({
   value,
   onChange,
   options,
+  risks,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: ChipOpt<string>[];
+  risks?: Record<string, "clean" | "high">;
 }) {
   return (
     <div role="group" aria-label={label} style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
       {options.map((o) => {
         const active = value === o.id;
+        const isHighRisk = risks?.[o.id] === "high";
         return (
           <button
             key={o.id}
@@ -472,6 +507,9 @@ function ChipGroup({
             aria-pressed={active}
             onClick={() => onChange(o.id)}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
               padding: "4px 10px",
               background: active ? "var(--ink)" : "transparent",
               color: active ? "var(--paper)" : (o.accent ? "var(--accent)" : "var(--ink-2)"),
@@ -483,6 +521,25 @@ function ChipGroup({
             }}
           >
             {o.label}
+            {isHighRisk && (
+              <span
+                data-testid={`tos-risk-badge-${o.id}`}
+                aria-label={`${o.label} ToS risk`}
+                title="This source scrapes a site whose ToS forbids automation."
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                  padding: "1px 4px",
+                  border: `1px solid ${active ? "var(--paper)" : "var(--accent)"}`,
+                  color: active ? "var(--paper)" : "var(--accent)",
+                  borderRadius: 2,
+                }}
+              >
+                ToS
+              </span>
+            )}
           </button>
         );
       })}

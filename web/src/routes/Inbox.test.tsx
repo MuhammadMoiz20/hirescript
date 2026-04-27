@@ -9,6 +9,7 @@ const mockApi = vi.hoisted(() => ({
   preparePosting: vi.fn(),
   skipPosting: vi.fn(),
   pasteJobUrl: vi.fn(),
+  listSources: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: mockApi }));
@@ -45,6 +46,15 @@ const samplePostings = [
 beforeEach(() => {
   Object.values(mockApi).forEach((fn) => fn.mockReset());
   mockApi.listPostings.mockResolvedValue({ items: samplePostings, total: 2 });
+  mockApi.listSources.mockResolvedValue([
+    { name: "greenhouse", tos_risk: "clean" },
+    { name: "lever", tos_risk: "clean" },
+    { name: "ashby", tos_risk: "clean" },
+    { name: "workable", tos_risk: "clean" },
+    { name: "linkedin", tos_risk: "high" },
+    { name: "indeed", tos_risk: "high" },
+    { name: "wellfound", tos_risk: "high" },
+  ]);
   mockApi.getPosting.mockResolvedValue({
     ...samplePostings[0],
     description_text: "Full description here.",
@@ -274,4 +284,23 @@ test("toggling a sortable header reverses the row order", async () => {
   rows = screen.getAllByTestId("posting-row");
   expect(rows[0]).toHaveAttribute("data-posting-id", "2"); // desc → Beta first
   expect(rows[1]).toHaveAttribute("data-posting-id", "1");
+});
+
+test("source filter chips include scrapers and render a ToS badge for high-risk ones", async () => {
+  renderInbox();
+  await waitFor(() => expect(mockApi.listSources).toHaveBeenCalled());
+  const sourceGroup = screen.getByRole("group", { name: /source filter/i });
+  // New scraper chips are present.
+  expect(within(sourceGroup).getByRole("button", { name: /LinkedIn/i })).toBeInTheDocument();
+  expect(within(sourceGroup).getByRole("button", { name: /Indeed/i })).toBeInTheDocument();
+  expect(within(sourceGroup).getByRole("button", { name: /Wellfound/i })).toBeInTheDocument();
+  // ToS badge appears next to the high-risk chips.
+  await waitFor(() => {
+    expect(screen.getByTestId("tos-risk-badge-linkedin")).toBeInTheDocument();
+  });
+  expect(screen.getByTestId("tos-risk-badge-indeed")).toBeInTheDocument();
+  expect(screen.getByTestId("tos-risk-badge-wellfound")).toBeInTheDocument();
+  // Clean sources do NOT get a badge.
+  expect(screen.queryByTestId("tos-risk-badge-greenhouse")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("tos-risk-badge-lever")).not.toBeInTheDocument();
 });

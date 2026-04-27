@@ -878,8 +878,18 @@ export async function deleteApplication(id: number): Promise<void> {
   throw { status: res.status, detail } as ApiError;
 }
 
+export interface SourceInfo {
+  name: string;
+  tos_risk: "clean" | "high";
+}
+
+export async function listSources(): Promise<SourceInfo[]> {
+  return req<SourceInfo[]>("/sources");
+}
+
 export const api = {
   getProfile,
+  listSources,
   putProfile,
   listPostings,
   getPosting,
