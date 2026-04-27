@@ -13,7 +13,9 @@ scheduler keeps making progress on the rest of the allowlist.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import re
+from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -21,21 +23,33 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import JobPosting
+from app.services.sources.protocol import NormalizedPosting
+
+# Re-export NormalizedPosting so existing imports keep working.
+__all__ = [
+    "NormalizedPosting",
+    "GreenhouseSource",
+    "greenhouse_source",
+    "fetch_company_jobs",
+    "upsert_postings",
+    "_strip_html",
+    "GREENHOUSE_BASE_URL",
+]
 
 
 GREENHOUSE_BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
 
 
-class NormalizedPosting(TypedDict):
-    """Source-agnostic posting payload used by the upsert layer."""
-
-    source_job_id: str
-    title: str
-    location: str | None
-    apply_url: str
-    description_html: str | None
-    description_text: str
-    meta: dict[str, Any]
+# Recognized URL families:
+#   https://boards.greenhouse.io/<slug>/jobs/<id>
+#   https://job-boards.greenhouse.io/<slug>/jobs/<id>
+#   https://boards-api.greenhouse.io/v1/boards/<slug>/jobs/<id>
+_GH_PUBLIC_HOSTS = {"boards.greenhouse.io", "job-boards.greenhouse.io"}
+_GH_API_HOST = "boards-api.greenhouse.io"
+_GH_PUBLIC_PATH_RE = re.compile(r"^/(?P<slug>[a-z0-9\-]+)/jobs/(?P<jid>\d+)/?$", re.I)
+_GH_API_PATH_RE = re.compile(
+    r"^/v1/boards/(?P<slug>[a-z0-9\-]+)/jobs/(?P<jid>\d+)/?$", re.I
+)
 
 
 def _strip_html(html: str | None) -> str:
@@ -203,3 +217,64 @@ async def upsert_postings(
 
     await db.commit()
     return counts
+
+
+def _parse_gh_url(url: str) -> tuple[str, str] | None:
+    """Return ``(slug, job_id)`` if ``url`` is a Greenhouse posting URL.
+
+    Recognizes the three URL families :data:`_GH_PUBLIC_HOSTS` and
+    :data:`_GH_API_HOST`. Returns ``None`` when the URL does not match.
+    """
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return None
+    host = (p.netloc or "").lower()
+    if host in _GH_PUBLIC_HOSTS:
+        m = _GH_PUBLIC_PATH_RE.match(p.path or "")
+        if m is None:
+            return None
+        return m.group("slug"), m.group("jid")
+    if host == _GH_API_HOST:
+        m = _GH_API_PATH_RE.match(p.path or "")
+        if m is None:
+            return None
+        return m.group("slug"), m.group("jid")
+    return None
+
+
+class GreenhouseSource:
+    """:class:`Source` adapter for the Greenhouse Job Board API."""
+
+    name = "greenhouse"
+
+    async def fetch_company_postings(
+        self, slug: str, *, http: httpx.AsyncClient
+    ) -> list[NormalizedPosting]:
+        return await fetch_company_jobs(slug, http=http)
+
+    def matches_url(self, url: str) -> bool:
+        return _parse_gh_url(url) is not None
+
+    def slug_from_url(self, url: str) -> str:
+        parsed = _parse_gh_url(url)
+        if parsed is None:
+            raise ValueError(f"not a greenhouse posting URL: {url!r}")
+        return parsed[0]
+
+    async def fetch_one_url(
+        self, url: str, *, http: httpx.AsyncClient
+    ) -> NormalizedPosting:
+        parsed = _parse_gh_url(url)
+        if parsed is None:
+            raise ValueError(f"not a greenhouse posting URL: {url!r}")
+        slug, job_id = parsed
+        api_url = f"{GREENHOUSE_BASE_URL}/{slug}/jobs/{job_id}"
+        resp = await http.get(api_url, params={"content": "true"})
+        resp.raise_for_status()
+        raw = resp.json() or {}
+        return _normalize_one(raw)
+
+
+# Module-level instance — the registry imports this name.
+greenhouse_source = GreenhouseSource()
