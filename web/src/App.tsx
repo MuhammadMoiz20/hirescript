@@ -11,6 +11,7 @@ import Overview from "./routes/Overview";
 import HistoryMassApply from "./routes/HistoryMassApply";
 import Dashboard from "./routes/Dashboard";
 import Tiers from "./routes/Tiers";
+import Settings from "./routes/Settings";
 import TopBar from "./components/suite/TopBar";
 import NavRail, { type NavKey } from "./components/suite/NavRail";
 import CommandPalette, { type CommandItem } from "./components/suite/CommandPalette";
@@ -259,7 +260,7 @@ function StateApp() {
   ) : view === "tiers" ? (
     <Tiers onBack={goOverview} />
   ) : view === "settings" ? (
-    <PlaceholderPane title="Settings" />
+    <Settings onBack={goOverview} />
   ) : view === "history-massapply" ? (
     <HistoryMassApply onBack={goOverview} />
   ) : (
@@ -427,29 +428,3 @@ function SuiteShell({
   );
 }
 
-function PlaceholderPane({ title }: { title: string }) {
-  return (
-    <div
-      className="suite-pad"
-      data-testid={`placeholder-${title.toLowerCase().replace(/\s+/g, "-")}`}
-      style={{
-        padding: "32px 24px",
-        color: "var(--ink-3)",
-        fontFamily: "var(--f-sans)",
-        fontSize: 14,
-      }}
-    >
-      <div
-        style={{
-          fontFamily: "var(--f-serif)",
-          fontSize: 22,
-          color: "var(--ink)",
-          marginBottom: 6,
-        }}
-      >
-        {title}
-      </div>
-      Coming in Phase E
-    </div>
-  );
-}
