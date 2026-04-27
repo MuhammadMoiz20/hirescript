@@ -17,6 +17,7 @@ dependencies = [
     "pypdf==5.*",
     "claude-agent-sdk==0.1.*",
     "anthropic==0.39.*",
+    "aioimaplib==1.1.*",
     "boto3==1.35.*",
     "pgvector==0.3.*",
     "voyageai==0.3.*",
