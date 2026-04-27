@@ -795,12 +795,27 @@ export type Application = {
   awaiting_user_confirmation?: boolean;
 };
 
+export interface ApplicationResearch {
+  brief_md: string;
+  signals_json: {
+    recent_news?: string[];
+    hiring_signals?: string[];
+    people?: string[];
+    [k: string]: unknown;
+  };
+  model: string;
+  generated_at: string;
+}
+
 export type ApplicationDetail = Application & {
   resume_pdf_url: string | null;
   canonical_key: string | null;
   prepared_at: string;
   confirmation_html: string | null;
   confirmation_screenshot_path: string | null;
+  // Slice-5 Task 12: dream-tier research brief — present only when the
+  // dream_research agent has run for this application.
+  research?: ApplicationResearch | null;
 };
 
 export async function listApplications(params: {

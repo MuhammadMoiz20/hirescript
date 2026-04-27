@@ -328,6 +328,36 @@ class Application(Base):
     )
 
 
+class ApplicationResearch(Base):
+    """Dream-tier research brief produced by the dream_research agent.
+
+    One row per application (unique on ``application_id``). ``brief_md``
+    is human-readable markdown rendered in the application drawer;
+    ``signals_json`` is structured (recent_news / hiring_signals /
+    people) so a future tailor pass can consume specific signals
+    without re-parsing prose.
+    """
+
+    __tablename__ = "application_research"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    brief_md: Mapped[str] = mapped_column(Text, nullable=False)
+    signals_json: Mapped[dict] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class AnswerCache(Base):
     __tablename__ = "answer_cache"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -180,6 +180,18 @@ async def get_application(
 ):
     app = await _load_application_for_user(db, application_id, user_id)
     base = await _serialize_application(db, app)
+    # Dream-tier research is surfaced on the detail view when present —
+    # the field is None for non-dream postings (no row in the table).
+    from app.models import ApplicationResearch
+
+    research_row = (
+        await db.execute(
+            select(ApplicationResearch).where(
+                ApplicationResearch.application_id == app.id
+            )
+        )
+    ).scalar_one_or_none()
+
     base.update(
         {
             "resume_variant_id": app.resume_variant_id,
@@ -190,6 +202,7 @@ async def get_application(
             "prepared_at": app.prepared_at,
             "confirmation_html": app.confirmation_html,
             "confirmation_screenshot_path": app.confirmation_screenshot_path,
+            "research": research_row,
         }
     )
     return base

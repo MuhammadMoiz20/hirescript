@@ -46,6 +46,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (
     Application,
+    ApplicationResearch,
     Company,
     Job,
     JobDescription,
@@ -58,6 +59,7 @@ from app.models import (
 from app.schemas.profile import Profile
 from app.services import answer_cache, notifications
 from app.services.agents import discover_companies as agent_discover
+from app.services.agents import dream_research as agent_dream
 from app.services.canonical import canonicalize
 from app.services.classify import classify_posting
 from app.services.cover_letter import generate_cover_letter
@@ -928,6 +930,26 @@ async def run_prepare_application_job(
             )
             await s.commit()
             application_id = application.id
+            posting_tier_for_research = (
+                (await s.execute(
+                    select(JobPosting.tier).where(JobPosting.id == posting_id)
+                )).scalar_one_or_none()
+            )
+
+        # Dream-tier research: enqueue a one-shot dream_research job for
+        # the freshly-prepared application. The runner persists onto
+        # ``application_research`` (one row per application) and is a
+        # no-op for non-dream postings.
+        if posting_tier_for_research == "dream":
+            async with sf() as s:
+                s.add(
+                    Job(
+                        kind="dream_research",
+                        status="queued",
+                        payload={"application_id": application_id},
+                    )
+                )
+                await s.commit()
 
         # Verify pass — judges grounding of tailored materials. Failure here
         # MUST NOT block preparation; we leave verify_ok=None so the submit
@@ -2019,3 +2041,117 @@ async def run_discover_companies_job(
 
 
 RUNNERS["discover_companies"] = run_discover_companies_job
+
+
+# Slice-5 Task 12 — dream-tier research. After classify writes
+# tier="dream" the runner enqueues this job for the freshly-prepared
+# application; we persist a structured brief to ``application_research``
+# (one row per application, idempotent on repeat runs).
+async def run_dream_research_job(
+    sf: SessionFactory, job_id: uuid.UUID
+) -> None:
+    """Execute a queued ``dream_research`` job.
+
+    Reads ``payload['application_id']``, gathers posting + company +
+    profile context, runs the dream-research agent, and upserts the
+    result into ``application_research`` keyed by ``application_id``.
+    """
+    async with sf() as s:
+        job = (
+            await s.execute(select(Job).where(Job.id == job_id))
+        ).scalar_one()
+        application_id = int((job.payload or {}).get("application_id") or 0)
+        if not application_id:
+            return
+        app = (
+            await s.execute(
+                select(Application).where(Application.id == application_id)
+            )
+        ).scalar_one_or_none()
+        if app is None:
+            return
+        posting = (
+            await s.execute(
+                select(JobPosting).where(JobPosting.id == app.posting_id)
+            )
+        ).scalar_one_or_none()
+        if posting is None:
+            return
+        company = None
+        if posting.company_id is not None:
+            company = (
+                await s.execute(
+                    select(Company).where(Company.id == posting.company_id)
+                )
+            ).scalar_one_or_none()
+        profile_row = (
+            await s.execute(select(ProfileModel).where(ProfileModel.user_id == 1))
+        ).scalar_one_or_none()
+        profile = profile_row.data if profile_row is not None else {}
+
+        posting_payload = {
+            "title": posting.title,
+            "location": posting.location,
+            "description_text": posting.description_text,
+            "tier": posting.tier,
+            "apply_url": posting.apply_url,
+        }
+        company_payload = (
+            {
+                "slug": company.slug,
+                "display_name": company.display_name,
+                "source": company.source,
+            }
+            if company is not None
+            else {}
+        )
+
+    await emit_event(sf, job_id, phase="research_start", message="agent", data={})
+    out = await agent_dream.research_company(
+        posting=posting_payload, company=company_payload, profile=profile
+    )
+
+    brief = (out.get("brief_md") or "").strip()
+    signals = out.get("signals") or {}
+    if not isinstance(signals, dict):
+        signals = {}
+    if not brief:
+        # Don't persist a useless empty brief.
+        await emit_event(
+            sf, job_id, phase="research_done", message="empty", data={}
+        )
+        return
+
+    async with sf() as s:
+        existing = (
+            await s.execute(
+                select(ApplicationResearch).where(
+                    ApplicationResearch.application_id == application_id
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            s.add(
+                ApplicationResearch(
+                    application_id=application_id,
+                    brief_md=brief,
+                    signals_json=signals,
+                    model=agent_dream.model_name(deep=False),
+                )
+            )
+        else:
+            existing.brief_md = brief
+            existing.signals_json = signals
+            existing.model = agent_dream.model_name(deep=False)
+        await s.commit()
+
+    await emit_event(
+        sf,
+        job_id,
+        phase="research_done",
+        message=f"persisted application_id={application_id}",
+        data={"application_id": application_id},
+    )
+
+
+RUNNERS["dream_research"] = run_dream_research_job

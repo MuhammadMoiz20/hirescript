@@ -430,6 +430,57 @@ export default function QueueCard({
             )}
           </section>
 
+          {detail?.research && detail.research.brief_md && (
+            <section data-testid="application-research-panel">
+              <h3 className="eyebrow" style={{ margin: "0 0 6px" }}>
+                Company brief · dream tier
+              </h3>
+              <pre style={{
+                whiteSpace: "pre-wrap",
+                fontFamily: "var(--f-sans)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                margin: 0,
+                color: "var(--ink)",
+              }}>
+                {detail.research.brief_md}
+              </pre>
+              {detail.research.signals_json && (
+                <ul style={{
+                  margin: "8px 0 0",
+                  paddingLeft: 18,
+                  fontSize: 12,
+                  color: "var(--ink-2)",
+                  lineHeight: 1.5,
+                }}>
+                  {(detail.research.signals_json.recent_news || []).map((n, i) => (
+                    <li key={`news-${i}`} data-testid="research-signal-news">
+                      <strong>News:</strong> {n}
+                    </li>
+                  ))}
+                  {(detail.research.signals_json.hiring_signals || []).map((n, i) => (
+                    <li key={`hire-${i}`} data-testid="research-signal-hiring">
+                      <strong>Hiring:</strong> {n}
+                    </li>
+                  ))}
+                  {(detail.research.signals_json.people || []).map((n, i) => (
+                    <li key={`ppl-${i}`} data-testid="research-signal-people">
+                      <strong>People:</strong> {n}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mono" style={{
+                marginTop: 6,
+                fontSize: 10,
+                color: "var(--ink-4)",
+                letterSpacing: "0.04em",
+              }}>
+                {detail.research.model}
+              </div>
+            </section>
+          )}
+
           {formEntries.length > 0 && (
             <section>
               <h3 className="eyebrow" style={{ margin: "0 0 6px" }}>Form responses</h3>
