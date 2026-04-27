@@ -71,6 +71,28 @@ test("sends history and currentLatex on follow-up turns", async () => {
   expect(opts.history[0]).toEqual({ role: "user", content: "first turn" });
 });
 
+test("renders close affordance only when onClose is provided", () => {
+  const { rerender } = render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  expect(screen.queryByRole("button", { name: /close chat/i })).toBeNull();
+  rerender(<ChatSidebar resumeId={1} onProposed={() => {}} onClose={() => {}} />);
+  expect(screen.getByRole("button", { name: /close chat/i })).toBeInTheDocument();
+});
+
+test("preset chip prefills the input", () => {
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} />);
+  const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+  expect(textarea.value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: /tighten to 1 page/i }));
+  expect(textarea.value).toBe("Tighten to 1 page");
+});
+
+test("onClose fires when collapse button clicked", () => {
+  const onClose = vi.fn();
+  render(<ChatSidebar resumeId={1} onProposed={() => {}} onClose={onClose} />);
+  fireEvent.click(screen.getByRole("button", { name: /close chat/i }));
+  expect(onClose).toHaveBeenCalled();
+});
+
 test("shows error when onError fires", async () => {
   const { api } = await import("../api");
   (api.streamEdit as any).mockImplementationOnce(async (_id: number, _i: string, _t: any, cb: any) => {
