@@ -14,9 +14,12 @@ done".
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 import httpx
+
+
+TosRisk = Literal["clean", "high"]
 
 
 class NormalizedPosting(TypedDict):
@@ -46,6 +49,11 @@ class Source(Protocol):
     """
 
     name: str
+
+    # Optional ToS-risk tag — sources that scrape sites whose ToS forbids
+    # automated access mark themselves "high" so the UI can surface a badge.
+    # Defaults to "clean" via class-level attribute on each implementation.
+    tos_risk: TosRisk
 
     async def fetch_company_postings(
         self, slug: str, *, http: httpx.AsyncClient

@@ -247,6 +247,7 @@ class GreenhouseSource:
     """:class:`Source` adapter for the Greenhouse Job Board API."""
 
     name = "greenhouse"
+    tos_risk = "clean"
 
     async def fetch_company_postings(
         self, slug: str, *, http: httpx.AsyncClient

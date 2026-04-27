@@ -129,6 +129,7 @@ class LeverSource:
     """:class:`Source` adapter for the public Lever Postings API."""
 
     name = "lever"
+    tos_risk = "clean"
 
     async def fetch_company_postings(
         self, slug: str, *, http: httpx.AsyncClient

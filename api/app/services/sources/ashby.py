@@ -106,6 +106,7 @@ class AshbySource:
     """:class:`Source` adapter for the public Ashby job board API."""
 
     name = "ashby"
+    tos_risk = "clean"
 
     async def fetch_company_postings(
         self, slug: str, *, http: httpx.AsyncClient

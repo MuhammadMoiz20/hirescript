@@ -144,6 +144,7 @@ class WorkableSource:
     """:class:`Source` adapter for the public Workable Apply API."""
 
     name = "workable"
+    tos_risk = "clean"
 
     async def fetch_company_postings(
         self, slug: str, *, http: httpx.AsyncClient
