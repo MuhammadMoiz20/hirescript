@@ -7,6 +7,7 @@ adapters drop in by appending to this dict. See
 
 from __future__ import annotations
 
+from app.services.sources.ashby import ashby_source
 from app.services.sources.greenhouse import greenhouse_source
 from app.services.sources.lever import lever_source
 from app.services.sources.protocol import NormalizedPosting, Source
@@ -17,4 +18,5 @@ __all__ = ["NormalizedPosting", "SOURCES", "Source"]
 SOURCES: dict[str, Source] = {
     greenhouse_source.name: greenhouse_source,
     lever_source.name: lever_source,
+    ashby_source.name: ashby_source,
 }
