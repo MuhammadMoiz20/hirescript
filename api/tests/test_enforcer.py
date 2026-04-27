@@ -255,8 +255,9 @@ async def test_overflow_hints_passed_to_repair():
 
 async def test_one_page_with_overflows_reports_unenforced_after_budget():
     """If repair budget exhausts and overflows persist (page_count stays 1),
-    the result is still considered enforced for the one-page rule, but the
-    surviving overflows are surfaced so callers can warn the user."""
+    the run is NOT enforced — wraps/overfull warnings count as overflow,
+    even though the doc happens to be one page. Surviving overflows are
+    surfaced so callers can warn the user."""
     overflow = (_hint(),)
     fake_compile = MagicMock(side_effect=_compile_with_overflows([
         (1, overflow), (1, overflow), (1, overflow), (1, overflow), (1, overflow),
@@ -272,8 +273,65 @@ async def test_one_page_with_overflows_reports_unenforced_after_budget():
         )
     assert result.iterations == 4
     assert result.page_count == 1
-    assert result.enforced is True  # one-page rule satisfied
+    assert result.enforced is False  # persistent overflows => not enforced
     assert len(result.overflows) == 1
+
+
+async def test_enforce_runs_loop_when_only_wraps_present():
+    """A page_count==1 doc with wrap hints must trigger the repair loop;
+    the loop runs because _is_clean checks for overflows too, not just
+    page count."""
+    wrap_hint = OverflowHint(
+        overflow_pt=12.0, line_start=87, line_end=87,
+        snippet="Optimized PostgreSQL via connection pooling, reducing p95...",
+    )
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([
+        (1, (wrap_hint,)),
+        (1, ()),
+    ]))
+    captured: dict = {}
+
+    async def fake_repair(**kwargs):
+        captured.update(kwargs)
+        assert kwargs["overflow_hints"], "wrap hint must be forwarded"
+        assert "Optimized PostgreSQL" in kwargs["overflow_hints"][0]["snippet"]
+        return {"diff": "REVISED LATEX", "removed_terms": [], "rationale": "ok"}
+
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="ORIGINAL LATEX",
+            protected_terms=["PostgreSQL"],
+        )
+    assert result.enforced is True
+    assert result.iterations == 1
+    assert result.latex == "REVISED LATEX"
+
+
+async def test_enforce_exhausts_when_wraps_persist():
+    wrap_hint = OverflowHint(
+        overflow_pt=12.0, line_start=87, line_end=87,
+        snippet="bullet that never gets shorter",
+    )
+    fake_compile = MagicMock(side_effect=_compile_with_overflows([
+        (1, (wrap_hint,)),
+    ]))
+
+    async def fake_repair(**kwargs):
+        return {"diff": "STILL TOO LONG", "removed_terms": [], "rationale": "r"}
+
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="ORIGINAL",
+            protected_terms=[],
+            max_iterations=4,
+        )
+    assert result.enforced is False  # page_count==1 but overflows remain
+    assert result.iterations == 4
+    assert result.tier_history == ["haiku", "haiku", "sonnet", "sonnet"]
 
 
 async def test_clean_first_compile_skips_repair():

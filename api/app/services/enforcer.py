@@ -179,7 +179,7 @@ async def enforce_one_page(
         pdf=current_pdf,
         page_count=current_page_count,
         iterations=iterations,
-        enforced=current_page_count == 1,  # one-page rule satisfied even if overflows remain
+        enforced=_is_clean(current_page_count, current_overflows),
         tier_history=tier_history,
         log=log,
         overflows=current_overflows,
