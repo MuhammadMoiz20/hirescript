@@ -211,6 +211,58 @@ async def submit_application(
     return {"job_id": str(job_id)}
 
 
+@router.post("/{application_id}/confirm_submit")
+async def confirm_agent_submit(
+    application_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Confirm a paused browser-agent submit.
+
+    The agent fallback (Slice 5 task 5) drives the application form to the
+    brink of submission and parks the row in
+    ``status='awaiting_confirmation'`` with
+    ``awaiting_user_confirmation=True``. The user reviews the screenshot +
+    form summary in the queue and confirms via this endpoint, which:
+
+    - Validates the application is genuinely paused (rejects 409 if not).
+    - Records the confirmation timestamp on ``submitted_at``.
+    - Clears ``awaiting_user_confirmation`` and flips status to
+      ``submitted`` so downstream dedup + reporting see the row as a real
+      application.
+
+    NOTE: this slice does NOT re-open a persisted Playwright session and
+    fire the real submit click — Playwright contexts don't survive worker
+    process restarts and re-driving the form risks identity mismatches.
+    The user-confirm gate exists so the human is the system of record for
+    "I reviewed the agent's work and authorize submission". A future slice
+    can add a deterministic "press-submit-only" job once we have telemetry
+    showing the agent's mid-flow state survives long enough to re-attach.
+    """
+    from datetime import datetime, timezone
+
+    app = await _load_application_for_user(db, application_id, user_id)
+    if not app.awaiting_user_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail="application is not awaiting user confirmation",
+        )
+    app.awaiting_user_confirmation = False
+    app.status = "submitted"
+    app.submitted_at = datetime.now(timezone.utc)
+    app.error = None
+    await db.commit()
+    await db.refresh(app)
+    return {
+        "application_id": app.id,
+        "status": app.status,
+        "submitted_at": (
+            app.submitted_at.isoformat() if app.submitted_at else None
+        ),
+        "agent_session_id": app.agent_session_id,
+    }
+
+
 @router.post("/{application_id}/promote_to_A", response_model=ApplicationOut)
 async def promote_to_a(
     application_id: int,

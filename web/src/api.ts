@@ -784,6 +784,10 @@ export type Application = {
   verify_issues: string[];
   /** Slice 3: short rationale from the verifier. */
   verify_rationale: string | null;
+  /** Slice 5: opaque handle for a paused browser-agent submit session. */
+  agent_session_id?: string | null;
+  /** Slice 5: agent paused before final submit; user must confirm. */
+  awaiting_user_confirmation?: boolean;
 };
 
 export type ApplicationDetail = Application & {
@@ -839,6 +843,30 @@ export async function pauseA(id: number): Promise<Application> {
   return jsonOrThrow<Application>(res);
 }
 
+/**
+ * Confirm a browser-agent submit run that paused awaiting user review.
+ *
+ * The agent fallback (Slice 5 task 5) drives the application form to the
+ * brink of submit and parks the row in `status='awaiting_confirmation'`.
+ * The user reviews the screenshot + form summary in the queue and calls
+ * this endpoint to authorize the submission. The backend records the
+ * confirmation timestamp and flips the row to `submitted`.
+ */
+export async function confirmAgentSubmit(
+  id: number,
+): Promise<{
+  application_id: number;
+  status: string;
+  submitted_at: string | null;
+  agent_session_id: string | null;
+}> {
+  const res = await fetch(`${BASE}/applications/${id}/confirm_submit`, {
+    method: "POST",
+    credentials: "include",
+  });
+  return jsonOrThrow(res);
+}
+
 export async function deleteApplication(id: number): Promise<void> {
   const res = await fetch(`${BASE}/applications/${id}`, {
     method: "DELETE",
@@ -862,6 +890,7 @@ export const api = {
   submitApplication,
   promoteToA,
   pauseA,
+  confirmAgentSubmit,
   deleteApplication,
   listTiers,
   updateTier,
