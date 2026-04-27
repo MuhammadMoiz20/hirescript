@@ -100,6 +100,27 @@ Token-bucket per `(tier, source)` caps throughput. Hard daily caps per tier are 
 
 ## Web UI surfaces (additive to existing resume editor)
 
+### Design source (all slices)
+
+**Authoritative design reference for every UI surface in this plan and all subsequent slices:**
+
+- `https://api.anthropic.com/v1/design/h/eYoG49rlvB10YH7DYeCNgA` — fetch the bundle, read its README and `chats/chat1.md`, and treat the relevant screens as the visual + interaction contract for the surface being implemented.
+- `design/handoffs/hirescript/` — the existing in-repo handoff. Continues to own already-shipped tokens (so existing components don't drift). The bundle wins for new surfaces and for the unified suite shell.
+
+**Bundle organization → product mapping.** The bundle ships three prototype HTML files (`HireScript.html`, `Mass Apply.html`, `HireScript Suite.html`) only because the design tool iterated in stages. **The product is one app: `HireScript Suite`.** The other two are the per-job (resume editor) and mass-apply sub-screens that live *inside* the Suite under one top bar + grouped left nav + shared ⌘K. No iframes in production — everything runs in a single React SPA. Treat `HireScript Suite.html` as the integration target; treat the per-job and mass-apply files as the screen catalogues that source the surfaces.
+
+**Process for every slice that touches UI:**
+
+1. Before starting UI work, fetch the design bundle from the URL above and read `chats/chat1.md` (intent + final design decisions) and the relevant `*.jsx`/`*.css` files.
+2. Identify the surfaces in the bundle that match what the slice is building or refreshing.
+3. Reuse intent, layout, density, component hierarchy, typography, spacing, colors, and interaction patterns from the bundle.
+4. Translate into production React/TypeScript inside the existing SPA. Recreate visually pixel-perfect; do not copy the prototype's iframe-mounting structure or its `*.jsx` runtime — those are prototype-only.
+5. New design primitives go into `web/src/components/ui/` as the slice that introduces them lands. New tokens go into `web/src/styles/`.
+
+The first time this is invoked is **Slice 2.5 — Suite Design Pass** (see `docs/plans/2026-04-26-suite-design-pass.md`). Slices 3+ inherit the suite shell + token system from there.
+
+### Surfaces
+
 - **Inbox** — firehose of ingested jobs. Tier, fit score, company, title, source, status, mode. Filterable. Per-job overrides (force B, skip, promote tier, pin).
 - **Review queue** — B-mode jobs and A-mode jobs paused on captcha/MFA/agent-stuck. Each card: tailored PDF, cover letter, filled form summary, single submit button. Agent-stuck cards deep-link into the live browser session.
 - **Profile + KB editor** — three tabs: structured profile form, KB sources + sync status, onboarding-interview chat.
