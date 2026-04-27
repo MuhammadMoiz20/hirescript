@@ -181,6 +181,8 @@ class LinkedInSource:
         *,
         http: httpx.AsyncClient,
     ) -> CoverLetterRequirement:
+        # Easy Apply forms are dynamic and per-poster — no cheap probe.
+        # Return UNKNOWN so prepare defaults to generating a cover letter.
         return CoverLetterRequirement.UNKNOWN
 
 

@@ -181,6 +181,8 @@ class IndeedSource:
         *,
         http: httpx.AsyncClient,
     ) -> CoverLetterRequirement:
+        # Indeed apply forms are dynamic and gated behind login — no cheap
+        # probe. Return UNKNOWN so prepare defaults to generating a CL.
         return CoverLetterRequirement.UNKNOWN
 
 

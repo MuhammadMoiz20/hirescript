@@ -177,6 +177,8 @@ class WellfoundSource:
         *,
         http: httpx.AsyncClient,
     ) -> CoverLetterRequirement:
+        # Wellfound's apply form is rendered behind a Next.js SPA — no
+        # cheap probe. Return UNKNOWN so prepare defaults to generating a CL.
         return CoverLetterRequirement.UNKNOWN
 
 
