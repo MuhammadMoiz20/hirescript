@@ -296,6 +296,15 @@ class Application(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Browser-agent submit fallback (Slice 5 task 5). ``agent_session_id``
+    # is the opaque handle the runner records when the agent pauses; the
+    # ``awaiting_user_confirmation`` flag mirrors ``status='awaiting_confirmation'``
+    # so the review queue can filter on a boolean without parsing the
+    # status string vocabulary.
+    agent_session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    awaiting_user_confirmation: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     posting: Mapped["JobPosting"] = relationship()
     __table_args__ = (
         Index(
