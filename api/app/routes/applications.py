@@ -188,6 +188,8 @@ async def get_application(
             ),
             "canonical_key": app.canonical_key,
             "prepared_at": app.prepared_at,
+            "confirmation_html": app.confirmation_html,
+            "confirmation_screenshot_path": app.confirmation_screenshot_path,
         }
     )
     return base

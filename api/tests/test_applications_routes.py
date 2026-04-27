@@ -129,6 +129,9 @@ def test_get_application_returns_full_detail():
     assert body["prepared_at"]
     # No version seeded → no PDF URL.
     assert body["resume_pdf_url"] is None
+    # Confirmation artifacts default to None until submission populates them.
+    assert body["confirmation_html"] is None
+    assert body["confirmation_screenshot_path"] is None
 
 
 def test_get_application_404_for_missing():

@@ -27,6 +27,8 @@ class ApplicationDetailOut(ApplicationOut):
     resume_pdf_url: str | None = None
     canonical_key: str
     prepared_at: datetime
+    confirmation_html: str | None = None
+    confirmation_screenshot_path: str | None = None
 
 
 class ApplicationListOut(BaseModel):

@@ -135,7 +135,7 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
 
       {/* Actions */}
       <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6 }}>
-        {onSkip && posting.status !== "skipped" && (
+        {onSkip && posting.status !== "skip" && (
           <Button size="sm" variant="ghost" onClick={() => onSkip(posting.id)}>
             Skip
           </Button>
@@ -144,7 +144,7 @@ export default function PostingCard({ posting, onClick, onPrepare, onSkip, prepa
           size="sm"
           variant="primary"
           data-testid="posting-prepare-btn"
-          disabled={preparing || posting.status === "preparing" || posting.status === "prepared"}
+          disabled={preparing || posting.status === "preparing" || posting.status === "ready"}
           onClick={() => onPrepare(posting.id)}
         >
           {preparing ? "Preparing…" : "Prepare application"}
