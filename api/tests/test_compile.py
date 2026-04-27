@@ -255,3 +255,18 @@ def test_compile_no_wrap_for_minimal_doc_without_resume_macros():
     result = compile_latex(src)
     assert result.page_count == 1
     assert result.overflows == ()
+
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_compile_real_resume_flags_known_bullet_wraps():
+    src = (FIXTURES / "jakes_with_wraps.tex").read_text()
+    result = compile_latex(src)
+    snippets = " | ".join(h.snippet for h in result.overflows)
+    # Three bullets reported by the user as visibly wrapping:
+    assert "Optimized PostgreSQL" in snippets
+    assert "Dartmouth News" in snippets
+    assert "Shipped unpublish-assignments" in snippets

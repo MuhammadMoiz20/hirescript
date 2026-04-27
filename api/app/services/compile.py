@@ -118,11 +118,28 @@ def parse_overflows(log: str) -> tuple[OverflowHint, ...]:
         w = _WRAP_RE.search(line)
         if w:
             line_no = int(w.group(1))
+            # \detokenize emits a space between control sequences and their
+            # following brace ("\textbf {Foo}"). Collapse those so the snippet
+            # round-trips back to the source form. Then strip plain font-style
+            # wrappers (\textbf, \textit, \texttt, \emph) so the snippet reads
+            # as the visible bullet text — both the repair model and the
+            # regression tests match on visible words rather than markup.
+            raw = w.group(4)
+            cleaned = re.sub(r"(\\[A-Za-z@]+)\s+\{", r"\1{", raw)
+            for _ in range(4):
+                new = re.sub(
+                    r"\\(?:textbf|textit|texttt|emph)\{([^{}]*)\}",
+                    r"\1",
+                    cleaned,
+                )
+                if new == cleaned:
+                    break
+                cleaned = new
             hints.append((idx, OverflowHint(
                 overflow_pt=float(w.group(2)),
                 line_start=line_no,
                 line_end=line_no,
-                snippet=w.group(4),
+                snippet=cleaned,
             )))
     hints.sort(key=lambda pair: pair[0])
     return tuple(h for _, h in hints)
