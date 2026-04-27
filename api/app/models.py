@@ -275,6 +275,14 @@ class Application(Base):
     )
     canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verify_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verify_issues: Mapped[list[str]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    verify_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     prepared_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

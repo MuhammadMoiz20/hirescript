@@ -67,6 +67,7 @@ from app.services.sources.greenhouse import (
 from app.services.submit_adapters import greenhouse as greenhouse_submit
 from app.services.tailor import tailor_resume
 from app.services.tailor_for_application import tailor_for_application
+from app.services import verify
 from app.services.versioning import snapshot_resume_version
 
 SessionFactory = Callable[[], AsyncSession]
@@ -795,6 +796,54 @@ async def run_prepare_application_job(
             )
             await s.commit()
             application_id = application.id
+
+        # Verify pass — judges grounding of tailored materials. Failure here
+        # MUST NOT block preparation; we leave verify_ok=None so the submit
+        # step can decide whether to gate on it. Submit (Batch C) treats
+        # None as "not verified, allow only B-mode".
+        try:
+            async with sf() as s:
+                verdict = await verify.verify_application(
+                    s, application_id=application_id
+                )
+                await s.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(
+                        verify_ok=verdict["ok"],
+                        verify_issues=list(verdict["issues"]),
+                        verify_rationale=verdict["rationale"],
+                    )
+                )
+                await s.commit()
+            await emit_event(
+                sf,
+                job_id,
+                phase="verified",
+                message=None,
+                data={
+                    "ok": verdict["ok"],
+                    "issue_count": len(verdict["issues"]),
+                },
+            )
+        except Exception:  # noqa: BLE001 — verify is advisory at prepare time
+            logger.exception(
+                "verify_application failed for application %s; "
+                "leaving verify_ok=None",
+                application_id,
+            )
+            try:
+                await emit_event(
+                    sf,
+                    job_id,
+                    phase="verify_skipped",
+                    message="verifier raised; verify_ok left null",
+                    data={},
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "emit verify_skipped event failed for job %s", job_id
+                )
 
         async with sf() as s:
             await s.execute(

@@ -16,6 +16,9 @@ class ApplicationOut(BaseModel):
     form_payload: dict | None = None
     submitted_at: datetime | None = None
     error: str | None = None
+    verify_ok: bool | None = None
+    verify_issues: list[str] = []
+    verify_rationale: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

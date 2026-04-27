@@ -65,6 +65,22 @@ async def test_tiers_seeded():
 
 
 @pytest.mark.asyncio
+async def test_applications_have_verify_columns():
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='applications'"
+                )
+            )
+        ).all()
+        cols = {r[0] for r in rows}
+        for c in ("verify_ok", "verify_issues", "verify_rationale"):
+            assert c in cols, f"missing column {c}"
+
+
+@pytest.mark.asyncio
 async def test_applications_cascade_on_posting_delete():
     async with engine.connect() as conn:
         result = await conn.execute(text(
