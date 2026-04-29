@@ -17,6 +17,7 @@ from app.services.sources.protocol import (
     NormalizedPosting,
     Source,
 )
+from app.services.sources.simplify import simplify_source
 from app.services.sources.wellfound import wellfound_source
 from app.services.sources.workable import workable_source
 
@@ -31,4 +32,5 @@ SOURCES: dict[str, Source] = {
     linkedin_source.name: linkedin_source,
     indeed_source.name: indeed_source,
     wellfound_source.name: wellfound_source,
+    simplify_source.name: simplify_source,
 }
