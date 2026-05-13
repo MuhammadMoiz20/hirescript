@@ -10,6 +10,7 @@ import ProtectedTermPill from "./ui/ProtectedTermPill";
 interface Props {
   masterId: number;
   masterName: string;
+  masterOneLinePerBullet?: boolean;
   open: boolean;
   onClose: () => void;
   onCreated: (job: Job) => void;
@@ -42,12 +43,13 @@ function extractKeywords(jd: string): string[] {
     .map(([t]) => t);
 }
 
-export default function TailorModal({ masterId, masterName, open, onClose, onCreated }: Props) {
+export default function TailorModal({ masterId, masterName, masterOneLinePerBullet = false, open, onClose, onCreated }: Props) {
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [url, setUrl] = useState("");
   const [jdText, setJdText] = useState("");
   const [deepTailor, setDeepTailor] = useState(false);
+  const [oneLinePerBullet, setOneLinePerBullet] = useState(masterOneLinePerBullet);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase | null>(null);
@@ -75,6 +77,7 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
 
   function reset() {
     setTitle(""); setCompany(""); setUrl(""); setJdText(""); setDeepTailor(false);
+    setOneLinePerBullet(masterOneLinePerBullet);
     setPhase(null); setJobId(null);
   }
 
@@ -115,6 +118,7 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
         url: url.trim() || undefined,
         jd_text: jdText,
         deep_tailor: deepTailor,
+        one_line_per_bullet: oneLinePerBullet,
       });
       id = res.job_id;
       setJobId(id);
@@ -378,6 +382,33 @@ export default function TailorModal({ masterId, masterName, open, onClose, onCre
               </div>
             </div>
             <ModelBadge model={deepTailor ? "opus" : "sonnet"} size="sm" />
+          </label>
+
+          {/* One-line-per-bullet toggle */}
+          <label
+            style={{
+              border: "1px solid var(--rule)",
+              borderRadius: 3,
+              padding: "10px 12px",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              aria-label="Enforce one line per bullet"
+              checked={oneLinePerBullet}
+              onChange={(e) => setOneLinePerBullet(e.target.checked)}
+              style={{ accentColor: "var(--ink)" }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Enforce one line per bullet</div>
+              <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>
+                Variant repair will rewrite any bullet that wraps to a second line. Defaults to the master's setting.
+              </div>
+            </div>
           </label>
 
           {/* Status / errors */}

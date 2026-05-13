@@ -32,8 +32,56 @@ test("scratch mode calls createResume", async () => {
   fireEvent.change(screen.getByLabelText(/resume name/i), { target: { value: "S" } });
   fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
   const { api } = await import("../api");
-  await waitFor(() => expect(api.createResume).toHaveBeenCalledWith("S", "jakes"));
+  await waitFor(() => expect(api.createResume).toHaveBeenCalledWith("S", "jakes", false));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
+});
+
+test("renders enforce-one-line checkbox defaulting unchecked", () => {
+  render(<Onboarding onCancel={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /start from scratch/i }));
+  const checkbox = screen.getByRole("checkbox", { name: /enforce one line per bullet/i });
+  expect(checkbox).not.toBeChecked();
+});
+
+test("scratch mode forwards checked enforce-one-line flag to createResume", async () => {
+  render(<Onboarding onCancel={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /start from scratch/i }));
+  fireEvent.change(screen.getByLabelText(/resume name/i), { target: { value: "S" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /enforce one line per bullet/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  const { api } = await import("../api");
+  await waitFor(() => expect(api.createResume).toHaveBeenCalledWith("S", "jakes", true));
+});
+
+test("paste-LaTeX mode forwards checked flag to onboardTex", async () => {
+  render(<Onboarding onCancel={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /paste latex/i }));
+  fireEvent.change(screen.getByLabelText(/resume name/i), { target: { value: "T" } });
+  fireEvent.change(screen.getByLabelText(/latex source/i), {
+    target: { value: "\\documentclass{article}\\begin{document}x\\end{document}" },
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: /enforce one line per bullet/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  const { api } = await import("../api");
+  await waitFor(() =>
+    expect(api.onboardTex).toHaveBeenCalledWith("T", expect.any(String), true),
+  );
+});
+
+test("PDF mode forwards checked flag to onboardPdf", async () => {
+  render(<Onboarding onCancel={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /upload pdf/i }));
+  fireEvent.change(screen.getByLabelText(/resume name/i), { target: { value: "P" } });
+  const file = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "r.pdf", { type: "application/pdf" });
+  const input = screen.getByLabelText(/pdf file/i) as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [file] });
+  fireEvent.change(input);
+  fireEvent.click(screen.getByRole("checkbox", { name: /enforce one line per bullet/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+  const { api } = await import("../api");
+  await waitFor(() =>
+    expect(api.onboardPdf).toHaveBeenCalledWith("P", expect.any(File), true),
+  );
 });
 
 test("paste LaTeX mode calls onboardTex", async () => {

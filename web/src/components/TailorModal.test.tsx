@@ -176,6 +176,73 @@ test("shows error when POST fails with not_one_page detail", async () => {
   expect(MockEventSource.instances.length).toBe(0);
 });
 
+test("renders enforce-one-line checkbox prefilled from master flag", () => {
+  render(
+    <TailorModal
+      masterId={1}
+      masterName="M"
+      masterOneLinePerBullet={true}
+      open={true}
+      onClose={() => {}}
+      onCreated={() => {}}
+    />,
+  );
+  const cb = screen.getByRole("checkbox", { name: /enforce one line per bullet/i });
+  expect(cb).toBeChecked();
+});
+
+test("enforce-one-line checkbox defaults unchecked when master flag is false", () => {
+  render(
+    <TailorModal
+      masterId={1}
+      masterName="M"
+      masterOneLinePerBullet={false}
+      open={true}
+      onClose={() => {}}
+      onCreated={() => {}}
+    />,
+  );
+  expect(screen.getByRole("checkbox", { name: /enforce one line per bullet/i })).not.toBeChecked();
+});
+
+test("toggling enforce-one-line overrides master prefill in tailor request body", async () => {
+  render(
+    <TailorModal
+      masterId={1}
+      masterName="M"
+      masterOneLinePerBullet={true}
+      open={true}
+      onClose={() => {}}
+      onCreated={() => {}}
+    />,
+  );
+  fillRequired();
+  // Master flag prefilled true; user unchecks.
+  fireEvent.click(screen.getByRole("checkbox", { name: /enforce one line per bullet/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^tailor$/i }));
+  const { api } = await import("../api");
+  await waitFor(() =>
+    expect(api.tailorToJd).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ one_line_per_bullet: false }),
+    ),
+  );
+});
+
+test("submits one_line_per_bullet=true when checkbox checked", async () => {
+  setup();
+  fillRequired();
+  fireEvent.click(screen.getByRole("checkbox", { name: /enforce one line per bullet/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^tailor$/i }));
+  const { api } = await import("../api");
+  await waitFor(() =>
+    expect(api.tailorToJd).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ one_line_per_bullet: true }),
+    ),
+  );
+});
+
 test("cancelled terminal event surfaces a message and closes the stream", async () => {
   setup();
   fillRequired();
