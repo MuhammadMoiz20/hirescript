@@ -114,10 +114,15 @@ A live deployment of this repo runs on a Mac Studio, accessible via:
 ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net
 ```
 
-The deployed checkout lives at `~/Projects/HireScript` on that host and is a git clone of `origin/main` (https://github.com/MuhammadMoiz20/hirescript). Keep the deployment in sync with `main` after merging changes:
+The deployed checkout lives at `~/Projects/HireScript` on that host and is a git clone of `origin/main` (https://github.com/MuhammadMoiz20/hirescript).
+
+**Always sync the Mac Studio after finishing changes.** Whenever a task modifies code, the workflow is: commit → merge to `main` → push → sync the Mac Studio. A task is not "done" until the deployment has been rebuilt and is running the new code. Do this without waiting to be asked.
+
+The non-interactive `ssh` shell does not have Docker Desktop on its PATH (`docker-credential-desktop` will be missing too). Wrap the docker step in `zsh -l -c '…'` so the login shell loads the right PATH and credential helper:
 
 ```bash
-ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net 'cd ~/Projects/HireScript && git fetch origin && git reset --hard origin/main && docker compose up -d --build'
+ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net 'cd ~/Projects/HireScript && git fetch origin && git reset --hard origin/main'
+ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net "zsh -l -c 'cd ~/Projects/HireScript && docker compose up -d --build'"
 ```
 
 Untracked local files on the host (`.env`, `docker-compose.override.yml`, `logs/`, `.playwright-mcp/`, `kb/*.md`) are preserved by `git reset --hard` because they're not in the index. Never run `git clean` on the deployment without explicit confirmation — it would wipe the `.env`.
