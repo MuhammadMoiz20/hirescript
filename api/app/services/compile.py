@@ -171,24 +171,29 @@ _INPUT_STUBS: dict[str, str] = {
 }
 
 
-def _inject_shim(source: str) -> str:
-    """Insert the pdfTeX compatibility shim and the wrap-detection shim
-    immediately before \\documentclass (or at the start if no
-    \\documentclass is present)."""
-    combined = _PDFTEX_SHIM + WRAP_SHIM
+def _inject_shim(source: str, inject_wrap_shim: bool = True) -> str:
+    """Insert the pdfTeX compatibility shim and (optionally) the wrap-detection
+    shim immediately before \\documentclass (or at the start if no
+    \\documentclass is present). The pdfTeX shim is always injected because it
+    only fills in missing XeTeX/pdfTeX primitive compatibility; the wrap shim
+    is skipped when ``inject_wrap_shim`` is False (used for resumes that have
+    opted out of one-line-per-bullet enforcement)."""
+    combined = _PDFTEX_SHIM + (WRAP_SHIM if inject_wrap_shim else "")
     match = re.search(r"\\documentclass", source)
     if not match:
         return combined + source
     return source[: match.start()] + combined + source[match.start():]
 
 
-def compile_latex(source: str, timeout: int = 30) -> CompileResult:
+def compile_latex(
+    source: str, timeout: int = 30, inject_wrap_shim: bool = True
+) -> CompileResult:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         for name, content in _INPUT_STUBS.items():
             (tmp_path / name).write_text(content)
         tex_file = tmp_path / "doc.tex"
-        tex_file.write_text(_inject_shim(source))
+        tex_file.write_text(_inject_shim(source, inject_wrap_shim=inject_wrap_shim))
         result = subprocess.run(
             ["tectonic", "-X", "compile", "--keep-logs", "--outdir", str(tmp_path), str(tex_file)],
             capture_output=True, text=True, timeout=timeout,

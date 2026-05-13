@@ -255,7 +255,7 @@ function StateApp() {
   // If the Editor is open, take over the full content area (legacy behavior).
   // The NavRail still shows Editor + Diff entries via editorOpen=true.
   const content = editorOpen ? (
-    <Editor id={openId!} onBack={() => setOpenId(null)} />
+    <Editor id={openId!} onBack={() => setOpenId(null)} onOpenResume={(newId) => setOpenId(newId)} />
   ) : view === "overview" ? (
     <Overview />
   ) : view === "list" ? (

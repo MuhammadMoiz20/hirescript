@@ -25,6 +25,7 @@ beforeEach(() => {
         kind: "master",
         latex_source: "",
         updated_at: "2026-01-15T00:00:00Z",
+        one_line_per_bullet: true,
       },
       variants: [
         {
@@ -38,6 +39,7 @@ beforeEach(() => {
           job_description_id: 9,
           jd_title: "SWE",
           jd_company: "Acme",
+          one_line_per_bullet: true,
         },
       ],
     },
@@ -116,6 +118,15 @@ test("opens TailorModal when Tailor button clicked", async () => {
   await waitFor(() =>
     expect(screen.getByRole("dialog", { name: /tailor to jd/i })).toBeInTheDocument(),
   );
+});
+
+test("TailorModal opens prefilled with master's one_line_per_bullet flag", async () => {
+  render(<ResumeList onOpen={() => {}} />);
+  await screen.findByTestId("master-card");
+  fireEvent.click(screen.getByRole("button", { name: /tailor to jd/i }));
+  const dialog = await screen.findByRole("dialog", { name: /tailor to jd/i });
+  const checkbox = within(dialog).getByRole("checkbox", { name: /enforce one line per bullet/i });
+  expect(checkbox).toBeChecked();
 });
 
 test("delete on master with variants prompts to promote", async () => {

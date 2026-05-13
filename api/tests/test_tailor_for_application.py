@@ -169,3 +169,61 @@ async def test_tailor_for_application_no_kb_chunks(monkeypatch, db_session):
     # Empty KB → no addendum (or None) but tailor still called.
     assert captured.get("system_prompt_addendum") in (None, "")
     assert out["kb_chunks_used"] == 0
+
+
+@pytest.mark.asyncio
+async def test_tailor_for_application_inherits_master_one_line_flag(
+    monkeypatch, db_session
+):
+    await _ensure_user(db_session)
+    # Master with the flag explicitly set to True.
+    master = Resume(
+        user_id=1,
+        kind="master",
+        parent_id=None,
+        name="Master",
+        template_id="jakes",
+        latex_source="\\documentclass{article}\\begin{document}m\\end{document}",
+        protected_terms=["Python"],
+        one_line_per_bullet=True,
+    )
+    db_session.add(master)
+    await db_session.commit()
+    await db_session.refresh(master)
+    master_id = master.id
+
+    posting_id = await _seed_posting(db_session)
+
+    async def fake_retrieve(db, *, user_id, query, k=8, source_filter=None):
+        return []
+
+    monkeypatch.setattr(tfa.kb_ingest, "retrieve", fake_retrieve)
+
+    captured: dict = {}
+
+    async def fake_tailor_resume(**kwargs):
+        captured.update(kwargs)
+        return _FakeTailorResult(
+            variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
+            pdf=b"%PDF-1.4 fake",
+            page_count=1,
+            enforced=True,
+            iterations=1,
+            tier_history=["sonnet"],
+            keywords_used=[],
+        )
+
+    monkeypatch.setattr(tfa, "tailor_resume", fake_tailor_resume)
+
+    out = await tfa.tailor_for_application(
+        db_session, user_id=1, posting_id=posting_id
+    )
+
+    assert captured.get("one_line_per_bullet") is True
+    variant = (
+        await db_session.execute(
+            select(Resume).where(Resume.id == out["variant_id"])
+        )
+    ).scalar_one()
+    assert variant.one_line_per_bullet is True
+    assert variant.parent_id == master_id

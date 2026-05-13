@@ -199,3 +199,242 @@ def test_repair_endpoint_returns_envelope():
     assert "overflow_count" in body
     assert "enforced" in body
     assert "iterations" in body
+
+
+def test_create_resume_persists_one_line_flag():
+    cookies = _login()
+    r = client.post(
+        "/resumes",
+        json={"name": "OL", "template_id": "jakes", "one_line_per_bullet": True},
+        cookies=cookies,
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["one_line_per_bullet"] is True
+    # Verify persisted in DB
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch():
+        async with SessionLocal() as session:
+            return await session.get(Resume, body["id"])
+
+    row = asyncio.run(_fetch())
+    assert row is not None
+    assert row.one_line_per_bullet is True
+
+
+def test_create_resume_defaults_one_line_false():
+    cookies = _login()
+    r = client.post(
+        "/resumes",
+        json={"name": "OLDef", "template_id": "jakes"},
+        cookies=cookies,
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["one_line_per_bullet"] is False
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch():
+        async with SessionLocal() as session:
+            return await session.get(Resume, body["id"])
+
+    row = asyncio.run(_fetch())
+    assert row is not None
+    assert row.one_line_per_bullet is False
+
+
+def _make_fake_enforce(captured: dict):
+    from app.services.enforcer import EnforceResult
+
+    async def _fake(**kwargs):
+        captured.update(kwargs)
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF-fake",
+            page_count=1,
+            overflows=(),
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    return _fake
+
+
+def test_repair_skips_wrap_detection_when_flag_off(monkeypatch):
+    cookies = _login()
+    created = client.post(
+        "/resumes",
+        json={"name": "RepOff", "template_id": "jakes", "one_line_per_bullet": False},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    import app.routes.resumes as resumes_mod
+    monkeypatch.setattr(resumes_mod, "enforce_one_page", _make_fake_enforce(captured))
+    r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
+    assert r.status_code == 200
+    assert captured.get("detect_wraps") is False
+
+
+def test_repair_runs_wrap_detection_when_flag_on(monkeypatch):
+    cookies = _login()
+    created = client.post(
+        "/resumes",
+        json={"name": "RepOn", "template_id": "jakes", "one_line_per_bullet": True},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    import app.routes.resumes as resumes_mod
+    monkeypatch.setattr(resumes_mod, "enforce_one_page", _make_fake_enforce(captured))
+    r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
+    assert r.status_code == 200
+    assert captured.get("detect_wraps") is True
+
+
+def _patch_enforce(monkeypatch, captured: dict, *, rewritten_latex: str = "REWRITTEN"):
+    from app.services.enforcer import EnforceResult
+    import app.routes.resumes as resumes_mod
+
+    async def _fake(**kwargs):
+        captured.update(kwargs)
+        return EnforceResult(
+            latex=rewritten_latex,
+            pdf=b"%PDF-1.4 fake",
+            page_count=1,
+            overflows=(),
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    monkeypatch.setattr(resumes_mod, "enforce_one_page", _fake)
+
+
+def test_enforce_one_line_on_master_creates_independent_master(monkeypatch):
+    cookies = _login()
+    src = client.post(
+        "/resumes",
+        json={"name": "MasterSrc", "template_id": "jakes", "one_line_per_bullet": False},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    _patch_enforce(monkeypatch, captured)
+    r = client.post(f"/resumes/{src['id']}/enforce_one_line", cookies=cookies)
+    assert r.status_code == 201
+    body = r.json()
+    assert body["id"] != src["id"]
+    assert body["kind"] == "master"
+    assert body.get("parent_id") in (None, 0) or "parent_id" not in body
+    # parent_id may not be in ResumeOut; verify via DB
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch(rid):
+        async with SessionLocal() as s:
+            return await s.get(Resume, rid)
+
+    new_row = asyncio.run(_fetch(body["id"]))
+    src_row = asyncio.run(_fetch(src["id"]))
+    assert new_row.kind == "master"
+    assert new_row.parent_id is None
+    assert new_row.job_description_id is None
+    assert new_row.one_line_per_bullet is True
+    assert new_row.name == f"{src['name']} (one-line)"
+    # source unchanged
+    assert src_row.one_line_per_bullet is False
+    assert src_row.name == "MasterSrc"
+
+
+def test_enforce_one_line_on_variant_creates_sibling_under_master(monkeypatch):
+    from unittest.mock import patch, AsyncMock
+    from app.services.tailor import TailorResult
+    cookies = _login()
+    master = client.post(
+        "/resumes",
+        json={"name": "MM", "template_id": "jakes"},
+        cookies=cookies,
+    ).json()
+    with patch("app.services.jobs_runner.tailor_resume", new=AsyncMock(return_value=TailorResult(
+        variant_latex="\\documentclass{article}\\begin{document}v\\end{document}",
+        pdf=b"%PDF...", page_count=1, enforced=True, iterations=0,
+        tier_history=[], keywords_used=[],
+    ))):
+        tailor_resp = client.post(
+            f"/resumes/{master['id']}/tailor",
+            cookies=cookies,
+            json={"title": "T", "company": "Co", "jd_text": "JD"},
+        )
+    assert tailor_resp.status_code == 200
+    variant_id = tailor_resp.json()["variant"]["id"]
+    jd_id = tailor_resp.json()["jd_id"]
+
+    captured: dict = {}
+    _patch_enforce(monkeypatch, captured)
+    r = client.post(f"/resumes/{variant_id}/enforce_one_line", cookies=cookies)
+    assert r.status_code == 201
+    body = r.json()
+    assert body["kind"] == "variant"
+    assert body["one_line_per_bullet"] is True
+
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch(rid):
+        async with SessionLocal() as s:
+            return await s.get(Resume, rid)
+
+    sib = asyncio.run(_fetch(body["id"]))
+    assert sib.parent_id == master["id"]
+    assert sib.parent_id != variant_id
+    assert sib.job_description_id == jd_id
+    assert sib.kind == "variant"
+
+
+def test_enforce_one_line_404_other_user(monkeypatch):
+    cookies = _login()
+    src = client.post(
+        "/resumes",
+        json={"name": "OtherUserSrc", "template_id": "jakes"},
+        cookies=cookies,
+    ).json()
+    # Insert a second user, then reassign the resume to that user_id.
+    import asyncio
+    from sqlalchemy import text as sa_text
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _reassign():
+        async with SessionLocal() as s:
+            await s.execute(
+                sa_text("INSERT INTO users (id) VALUES (2) ON CONFLICT (id) DO NOTHING")
+            )
+            row = await s.get(Resume, src["id"])
+            row.user_id = 2
+            await s.commit()
+
+    asyncio.run(_reassign())
+    captured: dict = {}
+    _patch_enforce(monkeypatch, captured)
+    r = client.post(f"/resumes/{src['id']}/enforce_one_line", cookies=cookies)
+    assert r.status_code == 404
+
+
+def test_enforce_one_line_calls_enforce_with_detect_wraps_true(monkeypatch):
+    cookies = _login()
+    src = client.post(
+        "/resumes",
+        json={"name": "DWSrc", "template_id": "jakes", "one_line_per_bullet": False},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    _patch_enforce(monkeypatch, captured)
+    r = client.post(f"/resumes/{src['id']}/enforce_one_line", cookies=cookies)
+    assert r.status_code == 201
+    assert captured.get("detect_wraps") is True

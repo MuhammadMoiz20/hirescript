@@ -73,6 +73,7 @@ async def tailor_resume(
     system_prompt_addendum: str | None = None,
     db: AsyncSession | None = None,
     tier_slug: str | None = None,
+    one_line_per_bullet: bool = False,
 ) -> TailorResult:
     progress = on_progress or _noop
     await progress("keywords_start", {})
@@ -117,6 +118,7 @@ async def tailor_resume(
         candidate_latex=candidate,
         protected_terms=protected,
         on_progress=progress,
+        detect_wraps=one_line_per_bullet,
     )
     return TailorResult(
         variant_latex=enforced.latex,

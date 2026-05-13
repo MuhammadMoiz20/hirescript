@@ -1,4 +1,6 @@
+import subprocess
 import textwrap
+from pathlib import Path
 
 from app.services.compile import (
     compile_latex, CompileError, CompileResult, OverflowHint, parse_overflows,
@@ -257,8 +259,6 @@ def test_compile_no_wrap_for_minimal_doc_without_resume_macros():
     assert result.overflows == ()
 
 
-from pathlib import Path
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -270,3 +270,36 @@ def test_compile_real_resume_flags_known_bullet_wraps():
     assert "Optimized PostgreSQL" in snippets
     assert "Dartmouth News" in snippets
     assert "Shipped unpublish-assignments" in snippets
+
+
+def _capture_doc_tex(monkeypatch):
+    """Wrap subprocess.run so we capture the doc.tex written to disk while
+    still invoking the real Tectonic binary."""
+    captured: dict[str, str] = {}
+    real_run = subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        captured["tex"] = Path(cmd[-1]).read_text()
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr("app.services.compile.subprocess.run", fake_run)
+    return captured
+
+
+def test_compile_skips_wrap_shim_when_disabled(monkeypatch):
+    captured = _capture_doc_tex(monkeypatch)
+    source = r"\documentclass{article}\begin{document}hello\end{document}"
+    compile_latex(source, inject_wrap_shim=False)
+    tex = captured["tex"]
+    assert "HS_WRAP" not in tex
+    assert r"\hsMeasureLine" not in tex
+    # The pdfTeX compatibility shim is always injected.
+    assert r"\pdfgentounicode" in tex
+
+
+def test_compile_injects_wrap_shim_by_default(monkeypatch):
+    captured = _capture_doc_tex(monkeypatch)
+    source = r"\documentclass{article}\begin{document}hello\end{document}"
+    compile_latex(source)
+    tex = captured["tex"]
+    assert r"\hsMeasureLine" in tex

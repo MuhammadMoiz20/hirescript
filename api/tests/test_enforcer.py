@@ -334,6 +334,50 @@ async def test_enforce_exhausts_when_wraps_persist():
     assert result.tier_history == ["haiku", "haiku", "sonnet", "sonnet"]
 
 
+async def test_enforce_passes_detect_wraps_false_to_compile():
+    """When detect_wraps=False, compile_latex must be called with
+    inject_wrap_shim=False."""
+    captured: dict = {}
+
+    def fake_compile(*args, **kwargs):
+        captured.update(kwargs)
+        return CompileResult(pdf=b"%PDF-fake", page_count=1, overflows=())
+
+    fake_repair = AsyncMock()
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="x",
+            protected_terms=[],
+            detect_wraps=False,
+            max_iterations=0,
+        )
+    assert captured.get("inject_wrap_shim") is False
+    assert result.enforced is True
+
+
+async def test_enforce_defaults_detect_wraps_true():
+    """Default detect_wraps=True propagates inject_wrap_shim=True to compile."""
+    captured: dict = {}
+
+    def fake_compile(*args, **kwargs):
+        captured.update(kwargs)
+        return CompileResult(pdf=b"%PDF-fake", page_count=1, overflows=())
+
+    fake_repair = AsyncMock()
+    with patch.object(enforcer_mod, "compile_latex", fake_compile), patch.object(
+        enforcer_mod, "repair_overflow", fake_repair
+    ):
+        result = await enforce_one_page(
+            candidate_latex="x",
+            protected_terms=[],
+            max_iterations=0,
+        )
+    assert captured.get("inject_wrap_shim") is True
+    assert result.enforced is True
+
+
 async def test_clean_first_compile_skips_repair():
     """1 page AND no overflows on first compile => no repair calls."""
     fake_compile = MagicMock(side_effect=_compile_with_overflows([(1, ())]))

@@ -60,6 +60,7 @@ async def enforce_one_page(
     protected_terms: list[str],
     max_iterations: int = 4,
     on_progress: ProgressFn | None = None,
+    detect_wraps: bool = True,
 ) -> EnforceResult:
     """Compile ``candidate_latex`` and, if it is multi-page, repair-loop.
 
@@ -78,7 +79,9 @@ async def enforce_one_page(
 
     current_latex = candidate_latex
     await progress("compile_start", {})
-    compile_result = await asyncio.to_thread(compile_latex, current_latex)
+    compile_result = await asyncio.to_thread(
+        compile_latex, current_latex, inject_wrap_shim=detect_wraps
+    )
     current_pdf = compile_result.pdf
     current_page_count = compile_result.page_count
     current_overflows = compile_result.overflows
@@ -144,7 +147,9 @@ async def enforce_one_page(
         last_diff = revised_latex
         current_latex = revised_latex
 
-        compile_result = await asyncio.to_thread(compile_latex, current_latex)
+        compile_result = await asyncio.to_thread(
+            compile_latex, current_latex, inject_wrap_shim=detect_wraps
+        )
         current_pdf = compile_result.pdf
         current_page_count = compile_result.page_count
         current_overflows = compile_result.overflows

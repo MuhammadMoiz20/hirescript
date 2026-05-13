@@ -134,6 +134,89 @@ def test_tailor_400_when_target_is_variant():
     assert r.json()["detail"]["error"] == "not_a_master_resume"
 
 
+def _create_master_with_flag(one_line: bool):
+    cookies = _login()
+    r = client.post(
+        "/resumes",
+        json={
+            "name": "Master",
+            "template_id": "jakes",
+            "one_line_per_bullet": one_line,
+        },
+        cookies=cookies,
+    ).json()
+    return cookies, r["id"]
+
+
+def _capture_tailor_resume():
+    captured: dict = {}
+
+    async def fake(**kwargs):
+        captured.update(kwargs)
+        return _ok_result()
+
+    return captured, fake
+
+
+def _get_variant(cookies, variant_id):
+    return client.get(f"/resumes/{variant_id}", cookies=cookies).json()
+
+
+def test_tailor_inherits_master_flag():
+    cookies, mid = _create_master_with_flag(True)
+    captured, fake = _capture_tailor_resume()
+    with patch("app.services.jobs_runner.tailor_resume", new=fake):
+        r = client.post(
+            f"/resumes/{mid}/tailor",
+            cookies=cookies,
+            json={"title": "SWE", "company": "Acme", "jd_text": "JD"},
+        )
+    assert r.status_code == 200
+    assert captured["one_line_per_bullet"] is True
+    variant_id = r.json()["variant"]["id"]
+    assert _get_variant(cookies, variant_id)["one_line_per_bullet"] is True
+
+
+def test_tailor_request_override_false():
+    cookies, mid = _create_master_with_flag(True)
+    captured, fake = _capture_tailor_resume()
+    with patch("app.services.jobs_runner.tailor_resume", new=fake):
+        r = client.post(
+            f"/resumes/{mid}/tailor",
+            cookies=cookies,
+            json={
+                "title": "SWE",
+                "company": "Acme",
+                "jd_text": "JD",
+                "one_line_per_bullet": False,
+            },
+        )
+    assert r.status_code == 200
+    assert captured["one_line_per_bullet"] is False
+    variant_id = r.json()["variant"]["id"]
+    assert _get_variant(cookies, variant_id)["one_line_per_bullet"] is False
+
+
+def test_tailor_request_override_true():
+    cookies, mid = _create_master_with_flag(False)
+    captured, fake = _capture_tailor_resume()
+    with patch("app.services.jobs_runner.tailor_resume", new=fake):
+        r = client.post(
+            f"/resumes/{mid}/tailor",
+            cookies=cookies,
+            json={
+                "title": "SWE",
+                "company": "Acme",
+                "jd_text": "JD",
+                "one_line_per_bullet": True,
+            },
+        )
+    assert r.status_code == 200
+    assert captured["one_line_per_bullet"] is True
+    variant_id = r.json()["variant"]["id"]
+    assert _get_variant(cookies, variant_id)["one_line_per_bullet"] is True
+
+
 def test_tailor_requires_auth():
     r = client.post(
         "/resumes/1/tailor",

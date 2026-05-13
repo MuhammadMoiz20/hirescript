@@ -21,7 +21,15 @@ import { useTheme } from "../components/ThemeProvider";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import { downloadFilename } from "../util/downloadFilename";
 
-export default function Editor({ id, onBack }: { id: number; onBack: () => void }) {
+export default function Editor({
+  id,
+  onBack,
+  onOpenResume,
+}: {
+  id: number;
+  onBack: () => void;
+  onOpenResume?: (id: number) => void;
+}) {
   const [resumeName, setResumeName] = useState<string>("");
   const [latex, setLatex] = useState("");
   const [pdf, setPdf] = useState<Blob | null>(null);
@@ -36,6 +44,7 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
   const [pageCount, setPageCount] = useState<number>(1);
   const [overflowCount, setOverflowCount] = useState<number>(0);
   const [tightening, setTightening] = useState(false);
+  const [enforcingOneLine, setEnforcingOneLine] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [formContent, setFormContent] = useState<any>(null);
   const { theme } = useTheme();
@@ -233,6 +242,30 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
       setError(detail?.log || detail?.message || String(e));
     } finally {
       setTightening(false);
+    }
+  }
+
+  async function enforceOneLine() {
+    if (enforcingOneLine) return;
+    const ok = window.confirm(
+      "This will create a new resume with one-line-per-bullet enforced. Continue?",
+    );
+    if (!ok) return;
+    setEnforcingOneLine(true);
+    setError(null);
+    try {
+      try { await api.updateResume(id, latex); } catch { /* surface below if it fails */ }
+      const sibling = await api.enforceOneLine(id);
+      if (onOpenResume) {
+        onOpenResume(sibling.id);
+      } else {
+        onBack();
+      }
+    } catch (e: any) {
+      const detail = e?.detail ?? e;
+      setError(detail?.log || detail?.message || String(e));
+    } finally {
+      setEnforcingOneLine(false);
     }
   }
 
@@ -481,6 +514,15 @@ export default function Editor({ id, onBack }: { id: number; onBack: () => void 
               title="Download PDF"
             >
               PDF
+            </Button>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={enforceOneLine}
+              disabled={enforcingOneLine}
+              title="Create a new resume with one-line-per-bullet enforced"
+            >
+              {enforcingOneLine ? "Enforcing…" : "Enforce one-line per bullet → save as new"}
             </Button>
             <Button
               size="sm"

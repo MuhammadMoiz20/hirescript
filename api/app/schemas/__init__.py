@@ -6,6 +6,7 @@ from typing import Literal
 class ResumeCreate(BaseModel):
     name: str
     template_id: str
+    one_line_per_bullet: bool = False
 
 class ResumeUpdate(BaseModel):
     name: str | None = None
@@ -18,6 +19,7 @@ class ResumeOut(BaseModel):
     kind: str
     latex_source: str
     updated_at: datetime
+    one_line_per_bullet: bool
 
     model_config = {"from_attributes": True}
 
@@ -61,6 +63,7 @@ class TailorRequest(BaseModel):
     url: str | None = None
     jd_text: str
     deep_tailor: bool = False
+    one_line_per_bullet: bool | None = None
 
 
 class SectionsResponse(BaseModel):
@@ -77,6 +80,7 @@ class SectionsPutRequest(BaseModel):
 class OnboardTexRequest(BaseModel):
     name: str
     latex_source: str
+    one_line_per_bullet: bool = False
 
 
 class OnboardedResumeOut(ResumeOut):

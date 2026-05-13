@@ -18,13 +18,16 @@ class OnboardResult:
     iterations: int
 
 
-async def onboard_from_pdf(*, pdf_bytes: bytes) -> OnboardResult:
+async def onboard_from_pdf(
+    *, pdf_bytes: bytes, one_line_per_bullet: bool = False
+) -> OnboardResult:
     raw = extract_pdf_text(pdf_bytes)
     content = await map_pdf_to_jakes_content(raw_text=raw)
     candidate = render_jakes(content)
     enforced = await enforce_one_page(
         candidate_latex=candidate,
         protected_terms=resolve_protected_terms(),
+        detect_wraps=one_line_per_bullet,
     )
     final_content = parse_jakes(enforced.latex)
     return OnboardResult(
@@ -37,10 +40,13 @@ async def onboard_from_pdf(*, pdf_bytes: bytes) -> OnboardResult:
     )
 
 
-async def onboard_from_latex(*, latex: str) -> OnboardResult:
+async def onboard_from_latex(
+    *, latex: str, one_line_per_bullet: bool = False
+) -> OnboardResult:
     enforced = await enforce_one_page(
         candidate_latex=latex,
         protected_terms=resolve_protected_terms(),
+        detect_wraps=one_line_per_bullet,
     )
     # Try to parse for content_json; tolerate non-jakes inputs by storing {}.
     try:

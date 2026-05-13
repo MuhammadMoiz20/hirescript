@@ -317,7 +317,7 @@ function VariantRow({
 interface MasterCardProps {
   group: ResumeGroup;
   onOpen: (id: number) => void;
-  onTailor: (id: number, name: string) => void;
+  onTailor: (id: number, name: string, oneLinePerBullet: boolean) => void;
   onMassApply: (id: number, name: string) => void;
   editingId: number | null;
   setEditingId: (id: number | null) => void;
@@ -422,7 +422,7 @@ function MasterCard({
         <Button variant="primary" icon="doc" onClick={() => onOpen(master.id)}>
           Open editor
         </Button>
-        <Button icon="sparkle" onClick={() => onTailor(master.id, master.name)}>
+        <Button icon="sparkle" onClick={() => onTailor(master.id, master.name, master.one_line_per_bullet)}>
           Tailor to JD
         </Button>
         <Button variant="ghost" icon="download" onClick={() => onDownload(master.id, master.name)}>
@@ -483,7 +483,7 @@ function Meta({ label, value }: { label: string; value: string }) {
 
 export default function ResumeList({ onOpen }: { onOpen: (id: number) => void }) {
   const [groups, setGroups] = useState<ResumeGroup[]>([]);
-  const [tailorTarget, setTailorTarget] = useState<{ id: number; name: string } | null>(null);
+  const [tailorTarget, setTailorTarget] = useState<{ id: number; name: string; oneLinePerBullet: boolean } | null>(null);
   const [massApplyTarget, setMassApplyTarget] = useState<{ id: number; name: string } | null>(null);
   const [view, setView] = useState<View>("library");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -691,7 +691,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
                 key={g.master.id}
                 group={g}
                 onOpen={onOpen}
-                onTailor={(id, name) => setTailorTarget({ id, name })}
+                onTailor={(id, name, oneLinePerBullet) => setTailorTarget({ id, name, oneLinePerBullet })}
                 onMassApply={(id, name) => setMassApplyTarget({ id, name })}
                 editingId={editingId}
                 setEditingId={setEditingId}
@@ -713,6 +713,7 @@ export default function ResumeList({ onOpen }: { onOpen: (id: number) => void })
         <TailorModal
           masterId={tailorTarget.id}
           masterName={tailorTarget.name}
+          masterOneLinePerBullet={tailorTarget.oneLinePerBullet}
           open={true}
           onClose={() => setTailorTarget(null)}
           onCreated={onTailorCreated}

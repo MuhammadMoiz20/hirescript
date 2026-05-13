@@ -175,6 +175,12 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             master_id = master.id
             master_name = master.name
             master_template_id = master.template_id
+            master_one_line = master.one_line_per_bullet
+
+        payload_flag = payload.get("one_line_per_bullet")
+        effective_flag = (
+            master_one_line if payload_flag is None else bool(payload_flag)
+        )
 
         async def on_progress(event: str, data: dict[str, Any]) -> None:
             await emit_event(sf, job_id, phase=event, message=None, data=data)
@@ -187,6 +193,7 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
             user_pinned=master_protected,
             deep_tailor=bool(payload.get("deep")),
             on_progress=on_progress,
+            one_line_per_bullet=effective_flag,
         )
 
         # If the enforcer couldn't get the tailored variant down to one page
@@ -219,6 +226,7 @@ async def run_tailor_job(sf: SessionFactory, job_id: uuid.UUID) -> None:
                 latex_source=result.variant_latex,
                 job_description_id=jd.id,
                 protected_terms=master_protected,
+                one_line_per_bullet=effective_flag,
             )
             s.add(variant)
             await s.flush()

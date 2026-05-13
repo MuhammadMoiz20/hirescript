@@ -134,6 +134,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [errorLog, setErrorLog] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
+  const [oneLinePerBullet, setOneLinePerBullet] = useState(false);
   const bp = useBreakpoint();
 
   async function submit(e: React.FormEvent) {
@@ -146,13 +147,13 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
     try {
       let result: ResumeOut | OnboardedResume;
       if (mode === "scratch") {
-        result = (await api.createResume(name.trim(), "jakes")) as ResumeOut;
+        result = (await api.createResume(name.trim(), "jakes", oneLinePerBullet)) as ResumeOut;
       } else if (mode === "tex") {
         if (!latex.trim()) {
           setError("Paste your LaTeX source first.");
           return;
         }
-        const r = await api.onboardTex(name.trim(), latex);
+        const r = await api.onboardTex(name.trim(), latex, oneLinePerBullet);
         if (!r.enforced) setWarn(`Imported, but compiles to ${r.page_count} pages — tighten in the editor.`);
         result = r;
       } else {
@@ -160,7 +161,7 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
           setError("Choose a PDF file first.");
           return;
         }
-        const r = await api.onboardPdf(name.trim(), file);
+        const r = await api.onboardPdf(name.trim(), file, oneLinePerBullet);
         if (!r.enforced) setWarn(`Imported, but compiles to ${r.page_count} pages — tighten in the editor.`);
         result = r;
       }
@@ -406,6 +407,32 @@ export default function Onboarding({ onCancel, onCreated }: Props) {
                         />
                       </Field>
                     )}
+
+                    <label
+                      style={{
+                        border: "1px solid var(--rule)",
+                        borderRadius: 3,
+                        padding: "10px 12px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label="Enforce one line per bullet"
+                        checked={oneLinePerBullet}
+                        onChange={(e) => setOneLinePerBullet(e.target.checked)}
+                        style={{ accentColor: "var(--ink)" }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>Enforce one line per bullet</div>
+                        <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>
+                          Repair flow rewrites bullets that wrap onto a second line. Off keeps your source untouched.
+                        </div>
+                      </div>
+                    </label>
 
                     <div
                       style={{
