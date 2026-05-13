@@ -31,6 +31,7 @@ export default function Editor({
   onOpenResume?: (id: number) => void;
 }) {
   const [resumeName, setResumeName] = useState<string>("");
+  const [resumeKind, setResumeKind] = useState<string>("master");
   const [latex, setLatex] = useState("");
   const [pdf, setPdf] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +74,7 @@ export default function Editor({
       const r = await api.getResume(id);
       setLatex(r.latex_source);
       setResumeName(r.name);
+      setResumeKind(r.kind || "master");
       try {
         const payload = await api.getSections(id);
         setSectionsPayload(payload);
@@ -559,18 +561,20 @@ export default function Editor({
             </Button>
             <Button
               size="sm"
-              variant={pageCount === 1 && !formDirty ? "primary" : "default"}
-              disabled={pageCount !== 1 || saving || formDirty}
+              variant={(pageCount === 1 || resumeKind === "master") && !formDirty ? "primary" : "default"}
+              disabled={saving || formDirty || (resumeKind !== "master" && pageCount !== 1)}
               onClick={save}
               title={
                 formDirty
                   ? "Compile first — the preview doesn't reflect your latest edits"
-                  : pageCount === 1
-                    ? "Save as final"
-                    : `Can't save as final — ${pageCount} pages`
+                  : resumeKind === "master"
+                    ? "Save"
+                    : pageCount === 1
+                      ? "Save as final"
+                      : `Can't save as final — ${pageCount} pages`
               }
             >
-              Save as final
+              {resumeKind === "master" ? "Save" : "Save as final"}
             </Button>
           </div>
           <div

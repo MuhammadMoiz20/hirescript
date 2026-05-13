@@ -513,7 +513,10 @@ async def accept_edit(
         raise HTTPException(
             422, detail={"error": "compile_failed", "log": str(e)[:4000]}
         )
-    if compiled.page_count != 1:
+    # One-page invariant applies to variants (the deliverable). Masters are
+    # the user's working source — they can grow past one page in progress and
+    # the page-count gate would be in the way.
+    if resume.kind != "master" and compiled.page_count != 1:
         raise HTTPException(
             422,
             detail={"error": "not_one_page", "page_count": compiled.page_count},
@@ -533,7 +536,7 @@ async def accept_edit(
     return Response(
         content=json.dumps(payload),
         media_type="application/json",
-        headers={"X-Page-Count": "1"},
+        headers={"X-Page-Count": str(compiled.page_count)},
     )
 
 
@@ -582,7 +585,9 @@ async def put_sections(
         raise HTTPException(
             422, detail={"error": "compile_failed", "log": str(e)[:4000]}
         )
-    if compiled.page_count != 1:
+    # Variants must stay at one page; masters are working sources and may
+    # exceed it while the user is editing.
+    if r.kind != "master" and compiled.page_count != 1:
         raise HTTPException(
             422,
             detail={"error": "not_one_page", "page_count": compiled.page_count},
