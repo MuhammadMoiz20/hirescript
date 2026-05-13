@@ -99,6 +99,7 @@ async def tailor_for_application(
         system_prompt_addendum=addendum or None,
         db=db,
         tier_slug=posting.tier,
+        one_line_per_bullet=master.one_line_per_bullet,
     )
 
     # Persist JD + variant + version snapshot. Mirrors run_tailor_job.
@@ -134,6 +135,7 @@ async def tailor_for_application(
         latex_source=result.variant_latex,
         job_description_id=jd.id,
         protected_terms=list(master.protected_terms or []),
+        one_line_per_bullet=master.one_line_per_bullet,
     )
     db.add(variant)
     await db.flush()

@@ -577,6 +577,7 @@ async def tailor_endpoint(
             "company": body.company,
             "url": body.url,
             "deep": body.deep_tailor,
+            "one_line_per_bullet": body.one_line_per_bullet,
         },
     )
     db.add(job)

@@ -48,6 +48,7 @@ async def test_runs_tailor_and_succeeds(
         user_pinned=None,
         deep_tailor=False,
         on_progress=None,
+        **kwargs,
     ):
         assert on_progress is not None
         await on_progress("draft_start", {"tier": "sonnet"})
@@ -134,6 +135,7 @@ async def test_cancellation_between_progress_events(
         user_pinned=None,
         deep_tailor=False,
         on_progress=None,
+        **kwargs,
     ):
         assert on_progress is not None
         # First progress event — runner persists JobEvent + checks status.
@@ -212,6 +214,7 @@ async def test_tailor_failure_marks_job_failed(
         user_pinned=None,
         deep_tailor=False,
         on_progress=None,
+        **kwargs,
     ):
         raise ValueError("boom")
 
