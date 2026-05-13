@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -49,6 +50,9 @@ class Resume(Base):
         nullable=False,
         default=list,
         server_default="[]",
+    )
+    one_line_per_bullet: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
