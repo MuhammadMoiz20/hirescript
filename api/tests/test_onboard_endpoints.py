@@ -78,6 +78,139 @@ def test_onboard_pdf_rejects_non_pdf():
     assert r.json()["detail"]["error"] == "not_a_pdf"
 
 
+def test_onboard_tex_persists_flag_true(monkeypatch):
+    cookies = _login()
+    captured: dict = {}
+
+    async def fake_enforce(**kwargs):
+        captured.update(kwargs)
+        from app.services.enforcer import EnforceResult
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF...",
+            page_count=1,
+            overflows=[],
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    monkeypatch.setattr("app.services.onboard.enforce_one_page", fake_enforce)
+    r = client.post("/resumes/onboard/tex", cookies=cookies, json={
+        "name": "TexFlagOn",
+        "latex_source": "\\documentclass{article}\\begin{document}foo\\end{document}",
+        "one_line_per_bullet": True,
+    })
+    assert r.status_code == 200, r.text
+    assert captured.get("detect_wraps") is True
+    body = r.json()
+    assert body["one_line_per_bullet"] is True
+
+
+def test_onboard_tex_defaults_flag_false(monkeypatch):
+    cookies = _login()
+    captured: dict = {}
+
+    async def fake_enforce(**kwargs):
+        captured.update(kwargs)
+        from app.services.enforcer import EnforceResult
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF...",
+            page_count=1,
+            overflows=[],
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    monkeypatch.setattr("app.services.onboard.enforce_one_page", fake_enforce)
+    r = client.post("/resumes/onboard/tex", cookies=cookies, json={
+        "name": "TexFlagDefault",
+        "latex_source": "\\documentclass{article}\\begin{document}foo\\end{document}",
+    })
+    assert r.status_code == 200, r.text
+    assert captured.get("detect_wraps") is False
+    body = r.json()
+    assert body["one_line_per_bullet"] is False
+
+
+def test_onboard_pdf_persists_flag_true(monkeypatch):
+    cookies = _login()
+    captured: dict = {}
+
+    async def fake_enforce(**kwargs):
+        captured.update(kwargs)
+        from app.services.enforcer import EnforceResult
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF...",
+            page_count=1,
+            overflows=[],
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    monkeypatch.setattr("app.services.onboard.enforce_one_page", fake_enforce)
+    monkeypatch.setattr("app.services.onboard.extract_pdf_text", lambda b: "")
+    async def fake_map(**kwargs):
+        return {"header": {"name": "X"}}
+    monkeypatch.setattr("app.services.onboard.map_pdf_to_jakes_content", fake_map)
+    monkeypatch.setattr("app.services.onboard.render_jakes", lambda c: "\\documentclass{article}\\begin{document}x\\end{document}")
+    monkeypatch.setattr("app.services.onboard.parse_jakes", lambda l: {"header": {"name": "X"}})
+
+    pdf = b"%PDF-1.4\n%%EOF\n"
+    r = client.post(
+        "/resumes/onboard/pdf",
+        cookies=cookies,
+        data={"name": "PdfFlagOn", "one_line_per_bullet": "true"},
+        files={"file": ("resume.pdf", pdf, "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+    assert captured.get("detect_wraps") is True
+    body = r.json()
+    assert body["one_line_per_bullet"] is True
+
+
+def test_onboard_pdf_defaults_flag_false(monkeypatch):
+    cookies = _login()
+    captured: dict = {}
+
+    async def fake_enforce(**kwargs):
+        captured.update(kwargs)
+        from app.services.enforcer import EnforceResult
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF...",
+            page_count=1,
+            overflows=[],
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    monkeypatch.setattr("app.services.onboard.enforce_one_page", fake_enforce)
+    monkeypatch.setattr("app.services.onboard.extract_pdf_text", lambda b: "")
+    async def fake_map(**kwargs):
+        return {"header": {"name": "X"}}
+    monkeypatch.setattr("app.services.onboard.map_pdf_to_jakes_content", fake_map)
+    monkeypatch.setattr("app.services.onboard.render_jakes", lambda c: "\\documentclass{article}\\begin{document}x\\end{document}")
+    monkeypatch.setattr("app.services.onboard.parse_jakes", lambda l: {"header": {"name": "X"}})
+
+    pdf = b"%PDF-1.4\n%%EOF\n"
+    r = client.post(
+        "/resumes/onboard/pdf",
+        cookies=cookies,
+        data={"name": "PdfFlagDefault"},
+        files={"file": ("resume.pdf", pdf, "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+    assert captured.get("detect_wraps") is False
+    body = r.json()
+    assert body["one_line_per_bullet"] is False
+
+
 def test_onboard_endpoints_require_auth():
     r = client.post("/resumes/onboard/tex", json={"name": "x", "latex_source": "y"})
     assert r.status_code == 401

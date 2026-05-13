@@ -103,7 +103,10 @@ async def onboard_tex(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        result = await onboard_from_latex(latex=body.latex_source)
+        result = await onboard_from_latex(
+            latex=body.latex_source,
+            one_line_per_bullet=body.one_line_per_bullet,
+        )
     except CompileError as e:
         raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
     resume = Resume(
@@ -113,6 +116,7 @@ async def onboard_tex(
         name=body.name,
         latex_source=result.latex_source,
         content_json=result.content_json,
+        one_line_per_bullet=body.one_line_per_bullet,
     )
     db.add(resume)
     await db.flush()
@@ -128,7 +132,7 @@ async def onboard_tex(
     await db.refresh(resume)
     response.headers["X-Page-Count"] = str(result.page_count)
     return OnboardedResumeOut(
-        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at")},
+        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at", "one_line_per_bullet")},
         enforced=result.enforced,
         iterations=result.iterations,
         page_count=result.page_count,
@@ -139,6 +143,7 @@ async def onboard_tex(
 async def onboard_pdf(
     response: Response,
     name: str = Form(...),
+    one_line_per_bullet: bool = Form(False),
     file: UploadFile = File(...),
     user_id: int = Depends(require_user),
     db: AsyncSession = Depends(get_db),
@@ -147,7 +152,10 @@ async def onboard_pdf(
     if not pdf_bytes or pdf_bytes[:4] != b"%PDF":
         raise HTTPException(400, detail={"error": "not_a_pdf"})
     try:
-        result = await onboard_from_pdf(pdf_bytes=pdf_bytes)
+        result = await onboard_from_pdf(
+            pdf_bytes=pdf_bytes,
+            one_line_per_bullet=one_line_per_bullet,
+        )
     except CompileError as e:
         raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})
     resume = Resume(
@@ -157,6 +165,7 @@ async def onboard_pdf(
         name=name,
         latex_source=result.latex_source,
         content_json=result.content_json,
+        one_line_per_bullet=one_line_per_bullet,
     )
     db.add(resume)
     await db.flush()
@@ -172,7 +181,7 @@ async def onboard_pdf(
     await db.refresh(resume)
     response.headers["X-Page-Count"] = str(result.page_count)
     return OnboardedResumeOut(
-        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at")},
+        **{k: getattr(resume, k) for k in ("id", "name", "template_id", "kind", "latex_source", "updated_at", "one_line_per_bullet")},
         enforced=result.enforced,
         iterations=result.iterations,
         page_count=result.page_count,
