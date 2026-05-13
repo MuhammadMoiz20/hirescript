@@ -323,6 +323,7 @@ async def repair_resume(
         result = await enforce_one_page(
             candidate_latex=r.latex_source,
             protected_terms=protected,
+            detect_wraps=r.one_line_per_bullet,
         )
     except CompileError as e:
         raise HTTPException(422, detail={"error": "compile_failed", "log": str(e)[:4000]})

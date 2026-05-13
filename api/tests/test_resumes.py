@@ -246,3 +246,51 @@ def test_create_resume_defaults_one_line_false():
     row = asyncio.run(_fetch())
     assert row is not None
     assert row.one_line_per_bullet is False
+
+
+def _make_fake_enforce(captured: dict):
+    from app.services.enforcer import EnforceResult
+
+    async def _fake(**kwargs):
+        captured.update(kwargs)
+        return EnforceResult(
+            latex=kwargs["candidate_latex"],
+            pdf=b"%PDF-fake",
+            page_count=1,
+            overflows=(),
+            enforced=True,
+            iterations=0,
+            tier_history=[],
+        )
+
+    return _fake
+
+
+def test_repair_skips_wrap_detection_when_flag_off(monkeypatch):
+    cookies = _login()
+    created = client.post(
+        "/resumes",
+        json={"name": "RepOff", "template_id": "jakes", "one_line_per_bullet": False},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    import app.services.enforcer as enforcer_mod
+    monkeypatch.setattr(enforcer_mod, "enforce_one_page", _make_fake_enforce(captured))
+    r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
+    assert r.status_code == 200
+    assert captured.get("detect_wraps") is False
+
+
+def test_repair_runs_wrap_detection_when_flag_on(monkeypatch):
+    cookies = _login()
+    created = client.post(
+        "/resumes",
+        json={"name": "RepOn", "template_id": "jakes", "one_line_per_bullet": True},
+        cookies=cookies,
+    ).json()
+    captured: dict = {}
+    import app.services.enforcer as enforcer_mod
+    monkeypatch.setattr(enforcer_mod, "enforce_one_page", _make_fake_enforce(captured))
+    r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
+    assert r.status_code == 200
+    assert captured.get("detect_wraps") is True
