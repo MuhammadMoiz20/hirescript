@@ -111,6 +111,10 @@ export default function Editor({
       const detail = e?.detail ?? e;
       if (detail?.error === "not_one_page") {
         setError(`Renders to ${detail.page_count} pages — tighten and try again.`);
+        // Reflect the rejected page count so the OverflowBanner appears with
+        // the "Ask Claude to tighten" CTA — otherwise the user has no escape
+        // path while save is blocked.
+        if (typeof detail.page_count === "number") setPageCount(detail.page_count);
       } else if (detail?.error === "compile_failed") {
         setError(detail.log || "Compile failed.");
       } else {
@@ -125,17 +129,25 @@ export default function Editor({
   async function compile() {
     setError(null);
     setCompiling(true);
+    let saveOk = false;
     try {
       await save();
+      saveOk = true;
       const { pdf: blob, pageCount: pc, overflowCount: oc } = await api.compileResume(id);
       setPdf(blob);
       setPageCount(pc);
       setOverflowCount(oc);
       setCompiledAt(Date.now());
     } catch (e: any) {
-      // save() already surfaced the error; only set if not already set.
-      if (!error) setError(e?.detail?.log || String(e));
-      setPdf(null);
+      // If save() threw it already set a user-facing error; don't clobber it
+      // with a serialized exception. Only handle the compileResume case here.
+      if (saveOk) {
+        const detail = e?.detail ?? e;
+        setError(detail?.log || detail?.message || String(e));
+      }
+      // Keep the previously-rendered PDF visible — wiping it on error left
+      // the user with no preview and caused the preview pane to flash between
+      // the PDF and the error block on every retry.
     } finally {
       setCompiling(false);
     }
@@ -299,6 +311,24 @@ export default function Editor({
     <p style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>Loading sections…</p>
   );
 
+  const errorBanner = error ? (
+    <pre
+      style={{
+        color: "var(--err)",
+        background: "var(--err-soft)",
+        border: "1px solid color-mix(in oklch, var(--err) 30%, transparent)",
+        padding: 10,
+        borderRadius: 3,
+        fontSize: 12,
+        whiteSpace: "pre-wrap",
+        margin: "0 0 10px",
+        flexShrink: 0,
+      }}
+    >
+      {error}
+    </pre>
+  ) : null;
+
   const previewPane = proposed ? (
     <DiffView
       currentLatex={latex}
@@ -310,22 +340,13 @@ export default function Editor({
       onReject={handleReject}
       busy={accepting}
     />
-  ) : error ? (
-    <pre
-      style={{
-        color: "var(--err)",
-        background: "var(--err-soft)",
-        border: "1px solid color-mix(in oklch, var(--err) 30%, transparent)",
-        padding: 10,
-        borderRadius: 3,
-        fontSize: 12,
-        whiteSpace: "pre-wrap",
-      }}
-    >
-      {error}
-    </pre>
   ) : (
-    <PdfPreview pdfBlob={pdf} />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      {errorBanner}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <PdfPreview pdfBlob={pdf} />
+      </div>
+    </div>
   );
 
   if (bp === "mobile") {
