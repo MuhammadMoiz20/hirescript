@@ -274,8 +274,8 @@ def test_repair_skips_wrap_detection_when_flag_off(monkeypatch):
         cookies=cookies,
     ).json()
     captured: dict = {}
-    import app.services.enforcer as enforcer_mod
-    monkeypatch.setattr(enforcer_mod, "enforce_one_page", _make_fake_enforce(captured))
+    import app.routes.resumes as resumes_mod
+    monkeypatch.setattr(resumes_mod, "enforce_one_page", _make_fake_enforce(captured))
     r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
     assert r.status_code == 200
     assert captured.get("detect_wraps") is False
@@ -289,8 +289,8 @@ def test_repair_runs_wrap_detection_when_flag_on(monkeypatch):
         cookies=cookies,
     ).json()
     captured: dict = {}
-    import app.services.enforcer as enforcer_mod
-    monkeypatch.setattr(enforcer_mod, "enforce_one_page", _make_fake_enforce(captured))
+    import app.routes.resumes as resumes_mod
+    monkeypatch.setattr(resumes_mod, "enforce_one_page", _make_fake_enforce(captured))
     r = client.post(f"/resumes/{created['id']}/repair", cookies=cookies)
     assert r.status_code == 200
     assert captured.get("detect_wraps") is True

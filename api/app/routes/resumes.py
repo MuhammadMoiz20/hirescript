@@ -312,9 +312,6 @@ async def repair_resume(
     source and metadata; does NOT persist — the caller decides whether to
     accept by calling PUT /resumes/{id}. This mirrors how AI chat edits flow:
     propose → user reviews → user accepts."""
-    from app.services.enforcer import enforce_one_page
-    from app.services.protected_terms import resolve_protected_terms
-
     r = await db.get(Resume, resume_id)
     if r is None or r.user_id != user_id:
         raise HTTPException(404)
