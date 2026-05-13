@@ -87,7 +87,7 @@ async def list_grouped(user_id: int = Depends(require_user), db: AsyncSession = 
         for v in ms_variants:
             jd = jd_map.get(v.job_description_id) if v.job_description_id else None
             data = {
-                **{k: getattr(v, k) for k in ("id","name","template_id","kind","latex_source","updated_at","parent_id","job_description_id")},
+                **{k: getattr(v, k) for k in ("id","name","template_id","kind","latex_source","updated_at","parent_id","job_description_id","one_line_per_bullet")},
                 "jd_title": jd.title if jd else None,
                 "jd_company": jd.company if jd else None,
             }
@@ -332,6 +332,67 @@ async def repair_resume(
         "iterations": result.iterations,
         "tier_history": result.tier_history,
     }
+
+
+@router.post("/{resume_id}/enforce_one_line", response_model=ResumeOut, status_code=201)
+async def enforce_one_line(
+    resume_id: int,
+    user_id: int = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run wrap-aware enforcement on a resume and save the result as a new
+    sibling row with ``one_line_per_bullet=True``. The source is unchanged.
+
+    - If the source is a master, the sibling is an independent master
+      (``parent_id=None``).
+    - If the source is a variant, the sibling sits under the same master
+      (``parent_id=src.parent_id``) and inherits ``job_description_id``.
+    """
+    src = await db.get(Resume, resume_id)
+    if src is None or src.user_id != user_id:
+        raise HTTPException(404)
+    protected = resolve_protected_terms(user_pinned=src.protected_terms or [])
+    try:
+        result = await enforce_one_page(
+            candidate_latex=src.latex_source,
+            protected_terms=protected,
+            detect_wraps=True,
+        )
+    except CompileError as e:
+        raise HTTPException(
+            422, detail={"error": "compile_failed", "log": str(e)[:4000]}
+        )
+    if src.kind == "master":
+        new_parent_id = None
+        new_jd_id = None
+    else:
+        new_parent_id = src.parent_id
+        new_jd_id = src.job_description_id
+    sibling = Resume(
+        user_id=user_id,
+        parent_id=new_parent_id,
+        job_description_id=new_jd_id,
+        kind=src.kind,
+        name=f"{src.name} (one-line)",
+        template_id=src.template_id,
+        latex_source=result.latex,
+        content_json=src.content_json,
+        protected_terms=list(src.protected_terms or []),
+        one_line_per_bullet=True,
+    )
+    db.add(sibling)
+    await db.flush()
+    await snapshot_resume_version(
+        db=db,
+        resume=sibling,
+        page_count=result.page_count,
+        edit_source="enforce_one_line",
+        edit_prompt=None,
+        pdf_bytes=result.pdf,
+    )
+    await db.commit()
+    await db.refresh(sibling)
+    return sibling
 
 
 @router.post("/{resume_id}/edits")
