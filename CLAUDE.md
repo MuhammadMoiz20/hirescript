@@ -106,6 +106,22 @@ docker compose run --rm web npm run test:e2e
 
 Use Docker Compose for dev/test commands once scaffolded. Avoid relying on host Python or Node versions unless the user explicitly asks.
 
+## Deployment Sync
+
+A live deployment of this repo runs on a Mac Studio, accessible via:
+
+```bash
+ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net
+```
+
+The deployed checkout lives at `~/Projects/HireScript` on that host and is a git clone of `origin/main` (https://github.com/MuhammadMoiz20/hirescript). Keep the deployment in sync with `main` after merging changes:
+
+```bash
+ssh moiz-dev@l7jx7hjlwf.tailce0375.ts.net 'cd ~/Projects/HireScript && git fetch origin && git reset --hard origin/main && docker compose up -d --build'
+```
+
+Untracked local files on the host (`.env`, `docker-compose.override.yml`, `logs/`, `.playwright-mcp/`, `kb/*.md`) are preserved by `git reset --hard` because they're not in the index. Never run `git clean` on the deployment without explicit confirmation — it would wipe the `.env`.
+
 ## Code Standards
 
 - Keep changes tightly scoped to the current task or user request.
