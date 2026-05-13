@@ -58,6 +58,16 @@ export default function Editor({
   const [desktopChatOpen, setDesktopChatOpen] = useState(false);
   const [compiledAt, setCompiledAt] = useState<number | null>(null);
 
+  // The form editor holds the user's in-progress content_json. The preview's
+  // pageCount reflects the *last saved* latex_source, not the current form
+  // state — so if the user edited the form without recompiling, pageCount=1
+  // can be a lie. Treat the preview as stale until a save+compile catches up.
+  const formDirty =
+    view === "form" &&
+    formContent != null &&
+    sectionsPayload != null &&
+    JSON.stringify(formContent) !== JSON.stringify(sectionsPayload.content_json);
+
   useEffect(() => {
     (async () => {
       const r = await api.getResume(id);
@@ -520,9 +530,11 @@ export default function Editor({
             >
               {compiling
                 ? "compiling…"
-                : compiledAt
-                  ? "compiled just now"
-                  : "not yet compiled"}
+                : formDirty
+                  ? "preview stale — recompile"
+                  : compiledAt
+                    ? "compiled just now"
+                    : "not yet compiled"}
             </span>
             <span style={{ flex: 1 }} />
             <Button
@@ -547,13 +559,15 @@ export default function Editor({
             </Button>
             <Button
               size="sm"
-              variant={pageCount === 1 ? "primary" : "default"}
-              disabled={pageCount !== 1 || saving}
+              variant={pageCount === 1 && !formDirty ? "primary" : "default"}
+              disabled={pageCount !== 1 || saving || formDirty}
               onClick={save}
               title={
-                pageCount === 1
-                  ? "Save as final"
-                  : `Can't save as final — ${pageCount} pages`
+                formDirty
+                  ? "Compile first — the preview doesn't reflect your latest edits"
+                  : pageCount === 1
+                    ? "Save as final"
+                    : `Can't save as final — ${pageCount} pages`
               }
             >
               Save as final
