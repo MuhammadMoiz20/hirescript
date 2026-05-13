@@ -81,6 +81,7 @@ export type ResumeOut = {
   kind: string;
   latex_source: string;
   updated_at: string;
+  one_line_per_bullet: boolean;
 };
 
 export type JobDescriptionOut = {
@@ -177,6 +178,7 @@ export type TailorRequest = {
   url?: string;
   jd_text: string;
   deep_tailor?: boolean;
+  one_line_per_bullet?: boolean | null;
 };
 
 export type TailorResponse = {
@@ -207,25 +209,47 @@ export async function tailorToJd(
 
 export type OnboardedResume = ResumeOut & { enforced: boolean; iterations: number; page_count: number };
 
-export async function onboardTex(name: string, latex_source: string): Promise<OnboardedResume> {
+export async function onboardTex(
+  name: string,
+  latex_source: string,
+  oneLinePerBullet?: boolean,
+): Promise<OnboardedResume> {
+  const body: Record<string, unknown> = { name, latex_source };
+  if (oneLinePerBullet !== undefined) body.one_line_per_bullet = oneLinePerBullet;
   const res = await fetch(`${BASE}/resumes/onboard/tex`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, latex_source }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
   return res.json();
 }
 
-export async function onboardPdf(name: string, file: File): Promise<OnboardedResume> {
+export async function onboardPdf(
+  name: string,
+  file: File,
+  oneLinePerBullet?: boolean,
+): Promise<OnboardedResume> {
   const fd = new FormData();
   fd.append("name", name);
   fd.append("file", file);
+  if (oneLinePerBullet !== undefined) {
+    fd.append("one_line_per_bullet", oneLinePerBullet ? "true" : "false");
+  }
   const res = await fetch(`${BASE}/resumes/onboard/pdf`, {
     method: "POST",
     credentials: "include",
     body: fd,
+  });
+  if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
+  return res.json();
+}
+
+export async function enforceOneLine(id: number): Promise<ResumeOut> {
+  const res = await fetch(`${BASE}/resumes/${id}/enforce_one_line`, {
+    method: "POST",
+    credentials: "include",
   });
   if (!res.ok) throw await res.json().catch(() => new Error(`HTTP ${res.status}`));
   return res.json();
@@ -937,8 +961,12 @@ export const api = {
   deleteKbDocument,
   login: (password: string) => req<{ ok: boolean }>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
   me: () => req<{ user_id: number }>("/auth/me"),
-  listResumes: () => req<Array<{ id: number; name: string; template_id: string; latex_source: string; updated_at: string }>>("/resumes"),
-  createResume: (name: string, template_id: string) => req("/resumes", { method: "POST", body: JSON.stringify({ name, template_id }) }),
+  listResumes: () => req<Array<{ id: number; name: string; template_id: string; latex_source: string; updated_at: string; one_line_per_bullet: boolean }>>("/resumes"),
+  createResume: (name: string, template_id: string, oneLinePerBullet?: boolean) => {
+    const body: Record<string, unknown> = { name, template_id };
+    if (oneLinePerBullet !== undefined) body.one_line_per_bullet = oneLinePerBullet;
+    return req("/resumes", { method: "POST", body: JSON.stringify(body) });
+  },
   getResume: (id: number) => req<{ id: number; name: string; latex_source: string }>(`/resumes/${id}`),
   updateResume: (id: number, latex_source: string) => req(`/resumes/${id}`, { method: "PUT", body: JSON.stringify({ latex_source }) }),
   async compileResume(id: number): Promise<{ pdf: Blob; pageCount: number; overflowCount: number }> {
@@ -981,6 +1009,7 @@ export const api = {
   putSections,
   onboardTex,
   onboardPdf,
+  enforceOneLine,
   listVersions,
   rollback,
   deleteResume,
