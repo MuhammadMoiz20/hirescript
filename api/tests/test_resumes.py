@@ -199,3 +199,50 @@ def test_repair_endpoint_returns_envelope():
     assert "overflow_count" in body
     assert "enforced" in body
     assert "iterations" in body
+
+
+def test_create_resume_persists_one_line_flag():
+    cookies = _login()
+    r = client.post(
+        "/resumes",
+        json={"name": "OL", "template_id": "jakes", "one_line_per_bullet": True},
+        cookies=cookies,
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["one_line_per_bullet"] is True
+    # Verify persisted in DB
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch():
+        async with SessionLocal() as session:
+            return await session.get(Resume, body["id"])
+
+    row = asyncio.run(_fetch())
+    assert row is not None
+    assert row.one_line_per_bullet is True
+
+
+def test_create_resume_defaults_one_line_false():
+    cookies = _login()
+    r = client.post(
+        "/resumes",
+        json={"name": "OLDef", "template_id": "jakes"},
+        cookies=cookies,
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["one_line_per_bullet"] is False
+    import asyncio
+    from app.db import SessionLocal
+    from app.models import Resume
+
+    async def _fetch():
+        async with SessionLocal() as session:
+            return await session.get(Resume, body["id"])
+
+    row = asyncio.run(_fetch())
+    assert row is not None
+    assert row.one_line_per_bullet is False

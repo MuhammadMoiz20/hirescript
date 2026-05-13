@@ -45,7 +45,7 @@ async def create_resume(body: ResumeCreate, user_id: int = Depends(require_user)
         tpl = get_template(body.template_id)
     except KeyError:
         raise HTTPException(404, "unknown template")
-    resume = Resume(user_id=user_id, kind="master", name=body.name, template_id=body.template_id, latex_source=tpl["latex_skeleton"])
+    resume = Resume(user_id=user_id, kind="master", name=body.name, template_id=body.template_id, latex_source=tpl["latex_skeleton"], one_line_per_bullet=body.one_line_per_bullet)
     db.add(resume)
     await db.commit()
     await db.refresh(resume)
